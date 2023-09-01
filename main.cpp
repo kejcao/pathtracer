@@ -15,10 +15,21 @@
 // constexpr double INF = std::numeric_limits<double>::infinity();
 #define INF std::numeric_limits<double>::infinity()
 
+double randreal(double x, double y) {
+    static std::random_device rd;
+    static std::mt19937 e2(rd());
+    assert(x <= y);
+	return std::uniform_real_distribution<>(x, y)(e2);
+}
+
 namespace config {
     constexpr bool multithread = true;
     constexpr double ambient_light = 40;
-    constexpr int area_light_samples = 64;
+    constexpr int area_light_samples = 32;
+    constexpr int focal_length = 1;
+    constexpr int aperature = 50;
+    constexpr int blur_samples = 128;
+    constexpr int raytrace_depth = 1; // set to 1 to not recurse.
 
     const unsigned int threadcnt = std::thread::hardware_concurrency();
 }
@@ -178,18 +189,10 @@ public:
                 for (size_t i = 1; i < face.size()-1; ++i) {
                     this->faces.push_back({pivot, face[i], face[i+1]});
                     addtriangle(pivot, face[i], face[i+1]);
-                    // triangles.push_back(Triangle(
-                    //     vertices[pivot[0]], vertices[face[i][0]], vertices[face[i+1][0]],
-                    //     vnormals[pivot[1]], vnormals[face[i][1]], vnormals[face[i+1][1]], smooth
-                    // ));
                 }
             } else {
                 this->faces.push_back({face[0], face[1], face[2]});
                 addtriangle(face[0], face[1], face[2]);
-                // triangles.push_back(Triangle(
-                //     vertices[face[0][0]], vertices[face[1][0]], vertices[face[2][0]],
-                //     vnormals[face[0][1]], vnormals[face[1][1]], vnormals[face[2][1]], smooth
-                // ));
             }
         }
     }
@@ -209,46 +212,17 @@ private:
     std::vector<Triangle> triangles;
 };
 
+class Scene;
+
 class LightSource {
 public:
     vec origin;
     LightSource(const vec &origin) : origin{origin} { }
-    // virtual double compute_illumination(vec source, vec intersection, vec normal) const = 0;
 };
 
 class PointLight : public LightSource {
 public:
     using LightSource::LightSource;
-    // double compute_illumination(vec source, vec intersection, vec normal) const override {
-    //     vec destination = (origin - intersection).normalize();
-    //     vec reflection = (destination.reflect_around(normal)).normalize();
-    //     return 180 * std::max(0.0, destination.dot(normal))
-    //          + 255 * pow(std::max(0.0, reflection.dot(source)), 20);
-
-    //     // If there is no object between the intersection point and the
-    //     // light source or if the intersected object is behind the light
-    //     // source, then calculate light. Otherwise there is shadow.
-    //     // double distance = castray(scene, intersection, destination).t;
-    //     // if (distance == INF || distance > (light->origin - intersection).norm()) {
-    //         // Don't make this mistake!!! pow(negative number, 20) = positive number.
-    //         // total += 255 * std::max(0.0, pow(reflection.dot(source), 20));
-    //     // }
-    // }
-
-    // double compute_illumination(vec intersection) const override {
-    //     vec destination = (origin - intersection).normalize();
-    //     // If there is no object between the intersection point and the
-    //     // light source or if the intersected object is behind the light
-    //     // source, then calculate light. Otherwise there is shadow.
-    //     double distance = castray(scene, intersection, destination).t;
-    //     if (distance == INF || distance > (light->origin - intersection).norm()) {
-    //         vec reflection = (destination.reflect_around(normal)).normalize();
-    //         total += 180 * std::max(0.0, destination.dot(normal));
-    //         total += 255 * pow(std::max(0.0, reflection.dot(source)), 20);
-    //         // Don't make this mistake!!! pow(negative number, 20) = positive number.
-    //         // total += 255 * std::max(0.0, pow(reflection.dot(source), 20));
-    //     }
-    // }
 };
 
 class AreaLight : public LightSource {
@@ -263,18 +237,25 @@ private:
 class Scene {
 public:
     std::vector<Object *> objects;
-    std::vector<LightSource *> lights;
+    std::vector<PointLight *> pointlights;
     std::vector<AreaLight *> arealights;
 
     Scene(
         const std::vector<Object *> &objects,
-        const std::vector<LightSource *> &lights,
-        const std::vector<AreaLight *> &arealights
-    ) : objects{objects}, lights{lights}, arealights{arealights} { }
+        const std::vector<LightSource *> &lights
+    ) : objects{objects} {
+        for (auto &&l : lights) {
+            if (std::is_same_v<decltype(l), AreaLight *>) {
+                arealights.push_back((AreaLight *)l);
+            } else {
+                pointlights.push_back((PointLight *)l);
+            }
+        }
+    }
 
     ~Scene() {
         for (auto &&obj : objects) delete obj;
-        for (auto &&light : lights) delete light;
+        for (auto &&light : pointlights) delete light;
         for (auto &&light : arealights) delete light;
     }
 private:
@@ -296,21 +277,17 @@ public:
         return closest;
     }
 
-    void render_pixel(const Scene &scene, int px, int py) {
-        vec direction = vec(
-            (px - (double)CW/2) *  vw/CW,
-            // We negate this so positive Y goes up and negative y down in camera origin.
-            (py - (double)CH/2) * -vh/CH, 1
-        ).rotate(this->direction.x, this->direction.y, this->direction.z);
-
-        HitData closest = castray(scene, origin, direction);
-        if (closest.t == INF) {
-            setpixel(px,py, 0,0,0);
-            return;
+    double raytrace(const Scene &scene, vec origin, vec direction, int depth=config::raytrace_depth) {
+        if (depth <= 0) {
+            return 0;
+        }
+        HitData hit = castray(scene, origin, direction);
+        if (hit.t == INF) {
+            return 0;
         }
 
-        vec intersection = origin + direction*closest.t;
-        vec normal = closest.normal.normalize();
+        vec intersection = origin + direction*hit.t;
+        vec normal = hit.normal.normalize();
         vec source = (origin - intersection).normalize();
 
         auto compute_illumination = [&](vec light_origin) {
@@ -319,10 +296,11 @@ public:
             // light source or if the intersected object is behind the light
             // source, then calculate light. Otherwise there is shadow.
             double distance = castray(scene, intersection, destination).t;
+            vec reflection = (destination.reflect_around(normal)).normalize();
             if (distance == INF || distance > (light_origin - intersection).norm()) {
-                vec reflection = (destination.reflect_around(normal)).normalize();
                 return 180 * std::max(0.0, destination.dot(normal)) +
-                       255 * pow(std::max(0.0, reflection.dot(source)), 20);
+                       255 * pow(std::max(0.0, reflection.dot(source)), 20) +
+                       .4 * raytrace(scene, intersection, reflection, depth-1);
                 // Don't make this mistake!!! pow(negative number, 20) = positive number.
                 // total += 255 * std::max(0.0, pow(reflection.dot(source), 20));
             }
@@ -330,23 +308,41 @@ public:
         };
 
         double total = config::ambient_light;
-        for (const auto &light : scene.lights) {
+        for (const auto &light : scene.pointlights) {
             total += compute_illumination(light->origin);
         }
-
-        std::random_device rd;
-        std::mt19937 e2(rd());
         for (const auto &light : scene.arealights) {
             for (int i = 0; i < config::area_light_samples; ++i) {
                 double x, y;
                 do {
-                    x = std::uniform_real_distribution<>(-light->radius, light->radius)(e2);
-                    y = std::uniform_real_distribution<>(-light->radius, light->radius)(e2);
+                    x = randreal(-light->radius, light->radius);
+                    y = randreal(-light->radius, light->radius);
                 } while(sqrt(x*x + y*y) > light->radius);
                 total += compute_illumination(light->origin + vec(x, y, 0)) / config::area_light_samples;
             }
         }
+
         total = std::min(std::max((int)total, 0), 255);
+        return total;
+    }
+
+    void render_pixel(const Scene &scene, int px, int py) {
+        vec direction = vec(
+            (px - (double)CW/2) *  vw/CW,
+            // We negate this so positive Y goes up and negative y down in camera origin.
+            (py - (double)CH/2) * -vh/CH, 1
+        ).rotate(this->direction.x, this->direction.y, this->direction.z);
+
+        double total = 0;
+        for (int i = 0; i < config::blur_samples; ++i) {
+            vec neworigin = origin + vec(
+                randreal(-(double)vw/CW / 2, (double)vw/CW / 2) * config::aperature,
+                randreal(-(double)vw/CH / 2, (double)vw/CH / 2) * config::aperature, 0
+            );
+            vec focal_point = neworigin + direction*config::focal_length;
+            total += raytrace(scene, neworigin, focal_point - neworigin) / config::blur_samples;
+        }
+
         setpixel(px,py, total,total,total);
     }
 
@@ -377,13 +373,12 @@ public:
             };
             std::vector<std::thread> threads;
             // We spin up "threadcnt-1" threads because the main thread works too.
-            for (auto i = 0; i < config::threadcnt-1; ++i)
+            for (unsigned int i = 0; i < config::threadcnt-1; ++i)
                 threads.push_back(std::thread(runner));
             runner();
             for (auto &&t : threads) t.join();
             std::cout << "\r";
         } else {
-            // TODO progress bar doesn't work :(
             for (int py = 0; py < CH; ++py) {
                 render(scene, py);
                 std::cout << "\r" << py*100 / CH << "%";
@@ -495,9 +490,9 @@ int main(void) {
     // Camera<256, 256>(vec(0, 0, -3), vec(0, 0, 0)).render(
     //     Scene(parse("sphere.obj"), {new PointLight(vec(0, 5, 0))}), "out.ppm");
     // Camera<256, 256>(vec(0, 5, -10), vec(.3, 0, 0)).render(
-    //     Scene(parse("cube.obj"), {new PointLight(vec(0, 5, -2))}, {}), "out.ppm");
+    //     Scene(parse("examples/cube.obj"), {new PointLight(vec(0, 5, -2))}, {}), "out.ppm");
     Camera<256, 256>(vec(0, 5, -10), vec(.3, 0, 0)).render(
-        Scene(parse("examples/cube.obj"), {}, {new AreaLight(vec(0, 5, -2), vec(0, 0, 0))}), "out.ppm");
+        Scene(parse("examples/cube.obj"), {new AreaLight(vec(0, 5, -2), vec(0, 0, 0))}), "out.ppm");
     // Camera<1024, 1024>(vec(0, 0, 10), vec(0, 0, 0)).render(
     //     Scene(parse("teapot.obj"), {
     //         new PointLight(vec(0, 5, 0)),
