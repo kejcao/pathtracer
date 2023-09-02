@@ -1,9 +1,8 @@
-raytracer: main.cpp
-	# g++ -std=c++20 -pedantic -Wall -O3 $^ -o $@
-	g++ -std=c++20 -pedantic -Wall -g $^ -o $@
+raytracer: main.cpp $(wildcard *.h)
+	g++ -std=c++20 -pedantic -Wall -g main.cpp -o $@
 
 test: raytracer
-	./raytracer && convert out.ppm out.png && sxiv out.png
+	./raytracer && convert out.ppm out.png && xdg-open out.png
 
 clean:
 	rm -f raytracer *.png *.ppm
