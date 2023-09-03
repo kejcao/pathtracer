@@ -7,6 +7,7 @@ class LightSource {
 public:
     vec origin;
     LightSource(const vec &origin) : origin{origin} { }
+    virtual ~LightSource() = default;
 };
 
 class PointLight : public LightSource {

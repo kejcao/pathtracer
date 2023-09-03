@@ -22,6 +22,7 @@ public:
     constexpr vec(double x, double y, double z) : x{x}, y{y}, z{z} { }
     constexpr vec(const vec &v) : x{v.x}, y{v.y}, z{v.z} { };
 
+    vec operator-() const { return vec(-x, -y, -z); }
     vec operator+(const vec &v) const { return vec(x + v.x, y + v.y, z + v.z); }
     vec operator-(const vec &v) const { return vec(x - v.x, y - v.y, z - v.z); }
     vec operator*(const vec &v) const { return vec(x * v.x, y * v.y, z * v.z); }
@@ -30,6 +31,10 @@ public:
     void operator-=(const vec &v) { x -= v.x; y -= v.y; z -= v.z; }
     void operator*=(const vec &v) { x *= v.x; y *= v.y; z *= v.z; }
     void operator/=(const vec &v) { x /= v.x; y /= v.y; z /= v.z; }
+    void operator*=(double n) { x *= n; y *= n; z *= n; }
+    void operator/=(double n) { x /= n; y /= n; z /= n; }
+    void operator+=(double n) { x += n; y += n; z += n; }
+    void operator-=(double n) { x -= n; y -= n; z -= n; }
     bool operator==(const vec &) const = default;
     bool operator!=(const vec &) const = default;
     double dot(const vec &v) const { return x*v.x + y*v.y + z*v.z; }

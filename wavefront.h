@@ -22,9 +22,9 @@ std::vector<Object *> parseobj(const std::string &filename) {
         size_t i = 0, pi = 0;
         while ((i = s.find(delim, pi)) != std::string::npos) {
             // skip empty strings
-            if (i-pi != 0) {
+            // if (i-pi != 0) {
                 toks.push_back(s.substr(pi, i-pi));
-            }
+            // }
             pi = i + delim.size();
         }
         toks.push_back(s.substr(pi));
@@ -68,17 +68,15 @@ std::vector<Object *> parseobj(const std::string &filename) {
 
     std::vector<Object *> objects;
     int offset = 0;
-    Polygon *p = nullptr;
+    Polygon *p = new Polygon();
     std::string line;
     while (std::getline(ifs, line)) {
         std::vector<std::string> toks = split(line);
 
         // TODO!!!! crashes if not prefixed with "o"
         if (toks[0] == "o") {
-            if (p != nullptr) {
-                objects.push_back(p);
-                offset += p->vertices.size();
-            }
+            objects.push_back(p);
+            offset += p->vertices.size();
             p = new Polygon();
             continue;
         } else if (toks[0] == "s") {
@@ -102,15 +100,11 @@ std::vector<Object *> parseobj(const std::string &filename) {
             std::vector<std::array<unsigned int, 2>> vs;
             for (const auto &vertex : toks | std::views::drop(1)) {
                 std::vector<std::string> toks = split(vertex, "/");
-                if (toks.size() == 1) {
-                    vs.push_back({ (unsigned int)std::stoi(toks[0])-1 - offset, 0 });
-                } else {
-                    assert(toks.size() == 3);
-                    vs.push_back({
-                        (unsigned int)std::stoi(toks[0])-1 - offset,
-                        (unsigned int)std::stoi(toks[2])-1 - offset
-                    });
-                }
+                assert(toks.size() >= 2 && toks.size() <= 4);
+                vs.push_back({
+                    (unsigned int)std::stoi(toks[0])-1 - offset,
+                    toks.size() >= 3 ? (unsigned int)std::stoi(toks[2])-1 - offset : 0
+                });
             }
             p->addfaces({vs});
         } else if(toks[0] == "mtllib") {
