@@ -16,7 +16,7 @@ double randreal(double x, double y) {
 
 class vec {
 public:
-    double x, y, z;
+    double x = 0, y = 0, z = 0;
 
     vec() = default;
     constexpr vec(double x, double y, double z) : x{x}, y{y}, z{z} { }
@@ -37,12 +37,39 @@ public:
     void operator-=(double n) { x -= n; y -= n; z -= n; }
     bool operator==(const vec &) const = default;
     bool operator!=(const vec &) const = default;
+    bool operator<(double n) const { return x < n && y < n && z < n; }
+
+    double operator[](int n) const {
+        switch(n) {
+            case 0: return x;
+            case 1: return y;
+            case 2: return z;
+        }
+        assert(false);
+    };
+
     double dot(const vec &v) const { return x*v.x + y*v.y + z*v.z; }
     double norm() const { return std::sqrt(x*x + y*y + z*z); }
 
     vec normalize() const {
         double n = norm();
         return n == 0 ? vec(x,y,z) : vec(x/n, y/n, z/n);
+    }
+
+    vec min(const vec &v) const {
+        return vec(
+            std::min(x, v.x),
+            std::min(y, v.y),
+            std::min(z, v.z)
+        );
+    }
+
+    vec max(const vec &v) const {
+        return vec(
+            std::max(x, v.x),
+            std::max(y, v.y),
+            std::max(z, v.z)
+        );
     }
 
     vec cross(const vec &v) const {
@@ -68,6 +95,24 @@ public:
         z = (int)z;
         return *this;
     }
+
+    vec pow(double n) {
+        return vec(
+            std::pow(x, n),
+            std::pow(y, n),
+            std::pow(z, n)
+        );
+    }
+
+    vec square() {
+        return vec(x*x, y*y, z*z);
+    }
+
+
+    double sum() {
+        return x + y + z;
+    }
+
 
     vec clamp(double lo, double hi) {
         x = std::min(std::max(x, lo), hi);

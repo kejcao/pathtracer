@@ -86,14 +86,21 @@ std::vector<Object *> parseobj(const std::string &filename) {
             ++lineno;
             std::vector<std::string> toks = split(line);
 
-            // TODO!!!! crashes if not prefixed with "o"
             if (toks[0] == "o") {
+                p->init();
                 objects.push_back(p);
                 offset += p->vertices.size();
                 p = new Polygon();
                 continue;
             } else if (toks[0] == "s") {
                 assert(toks.size() == 2);
+                if (toks[1] == "on") {
+                    p->smooth = true;
+                    continue;
+                } else if (toks[1] == "off") {
+                    p->smooth = false;
+                    continue;
+                }
                 p->smooth = std::stoi(toks[1]) == 1;
             } else if (toks[0] == "v") {
                 assert(toks.size() == 4);
@@ -119,7 +126,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
                         toks.size() >= 3 ? (unsigned int)std::stoi(toks[2])-1 - offset : 0
                     });
                 }
-                p->addfaces({vs});
+                p->faces.push_back({vs});
             } else if(toks[0] == "mtllib") {
                 assert(toks.size() == 2);
                 parsemtl(fs::path(filename).parent_path() / toks[1], materials);
@@ -129,6 +136,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
             }
         }
         if (p != nullptr) {
+            p->init();
             objects.push_back(p);
         }
         return objects;

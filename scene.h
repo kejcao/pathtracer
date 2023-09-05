@@ -10,6 +10,7 @@ public:
     std::vector<Object *> objects;
     std::vector<PointLight *> pointlights;
     std::vector<AreaLight *> arealights;
+    BVH bvh;
 
     Scene(
         const std::vector<Object *> &objects,
@@ -22,6 +23,7 @@ public:
                 arealights.push_back((AreaLight *)l);
             }
         }
+        bvh = BVH(this->objects);
     }
 
     ~Scene() {
@@ -31,6 +33,7 @@ public:
     }
 
     HitData castray(vec origin, vec direction) const {
+        return bvh.intersect(origin, direction);
         HitData closest = {INF};
         for (const auto &obj : objects) {
             HitData hit = obj->intersect(origin, direction);
