@@ -80,19 +80,22 @@ std::vector<Object *> parseobj(const std::string &filename) {
         std::map<std::string, Material *> materials;
         std::vector<Object *> objects;
         int offset = 0;
-        Polygon *p = new Polygon();
+        Polygon *p = nullptr;
         std::string line;
         while (std::getline(ifs, line)) {
             ++lineno;
             std::vector<std::string> toks = split(line);
 
             if (toks[0] == "o") {
-                p->init();
-                objects.push_back(p);
-                offset += p->vertices.size();
+                if (p != nullptr) {
+                    p->init();
+                    objects.push_back(p);
+                    offset += p->vertices.size();
+                }
                 p = new Polygon();
                 continue;
             } else if (toks[0] == "s") {
+                if (p == nullptr) p = new Polygon();
                 assert(toks.size() == 2);
                 if (toks[1] == "on") {
                     p->smooth = true;
@@ -103,6 +106,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
                 }
                 p->smooth = std::stoi(toks[1]) == 1;
             } else if (toks[0] == "v") {
+                if (p == nullptr) p = new Polygon();
                 assert(toks.size() == 4);
                 p->vertices.push_back(vec(
                     std::stof(toks[1]),
@@ -110,6 +114,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
                     std::stof(toks[3])
                 ));
             } else if (toks[0] == "vn") {
+                if (p == nullptr) p = new Polygon();
                 assert(toks.size() == 4);
                 p->vnormals.push_back(vec(
                     std::stof(toks[1]),
@@ -117,6 +122,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
                     std::stof(toks[3])
                 ));
             } else if(toks[0] == "f") {
+                if (p == nullptr) p = new Polygon();
                 std::vector<std::array<unsigned int, 2>> vs;
                 for (const auto &vertex : toks | std::views::drop(1)) {
                     std::vector<std::string> toks = split(vertex, "/");
@@ -131,6 +137,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
                 assert(toks.size() == 2);
                 parsemtl(fs::path(filename).parent_path() / toks[1], materials);
             } else if(toks[0] == "usemtl") {
+                if (p == nullptr) p = new Polygon();
                 assert(toks.size() == 2);
                 p->mat = materials[toks[1]];
             }

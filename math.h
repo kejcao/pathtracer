@@ -5,9 +5,11 @@
 #include <cassert>
 #include <ostream>
 
-#define INF std::numeric_limits<double>::infinity()
+using scalar = double;
 
-double randreal(double x, double y) {
+#define INF std::numeric_limits<scalar>::infinity()
+
+scalar randreal(scalar x, scalar y) {
     static std::random_device rd;
     static std::mt19937 e2(rd());
     assert(x <= y);
@@ -16,10 +18,10 @@ double randreal(double x, double y) {
 
 class vec {
 public:
-    double x = 0, y = 0, z = 0;
+    scalar x = 0, y = 0, z = 0;
 
     vec() = default;
-    constexpr vec(double x, double y, double z) : x{x}, y{y}, z{z} { }
+    constexpr vec(scalar x, scalar y, scalar z) : x{x}, y{y}, z{z} { }
     constexpr vec(const vec &v) : x{v.x}, y{v.y}, z{v.z} { };
 
     vec operator-() const { return vec(-x, -y, -z); }
@@ -31,15 +33,15 @@ public:
     void operator-=(const vec &v) { x -= v.x; y -= v.y; z -= v.z; }
     void operator*=(const vec &v) { x *= v.x; y *= v.y; z *= v.z; }
     void operator/=(const vec &v) { x /= v.x; y /= v.y; z /= v.z; }
-    void operator*=(double n) { x *= n; y *= n; z *= n; }
-    void operator/=(double n) { x /= n; y /= n; z /= n; }
-    void operator+=(double n) { x += n; y += n; z += n; }
-    void operator-=(double n) { x -= n; y -= n; z -= n; }
+    void operator*=(scalar n) { x *= n; y *= n; z *= n; }
+    void operator/=(scalar n) { x /= n; y /= n; z /= n; }
+    void operator+=(scalar n) { x += n; y += n; z += n; }
+    void operator-=(scalar n) { x -= n; y -= n; z -= n; }
     bool operator==(const vec &) const = default;
     bool operator!=(const vec &) const = default;
-    bool operator<(double n) const { return x < n && y < n && z < n; }
+    bool operator<(scalar n) const { return x < n && y < n && z < n; }
 
-    double operator[](int n) const {
+    scalar operator[](int n) const {
         switch(n) {
             case 0: return x;
             case 1: return y;
@@ -48,11 +50,11 @@ public:
         assert(false);
     };
 
-    double dot(const vec &v) const { return x*v.x + y*v.y + z*v.z; }
-    double norm() const { return std::sqrt(x*x + y*y + z*z); }
+    scalar dot(const vec &v) const { return x*v.x + y*v.y + z*v.z; }
+    scalar norm() const { return std::sqrt(x*x + y*y + z*z); }
 
     vec normalize() const {
-        double n = norm();
+        scalar n = norm();
         return n == 0 ? vec(x,y,z) : vec(x/n, y/n, z/n);
     }
 
@@ -81,7 +83,7 @@ public:
     }
 
     // Should totally precompute the rotation matrix. Maybe make transformation class? TODO
-    vec rotate(double a, double b, double y) const {
+    vec rotate(scalar a, scalar b, scalar y) const {
         return vec(
             (cos(a)*cos(y) * this->x) + (sin(a)*sin(b)*cos(y) - cos(a)*sin(y) * this->y) + (cos(a)*sin(b)*cos(y) + sin(a)*sin(y) * this->z),
             (cos(a)*sin(y) * this->x) + (sin(a)*sin(b)*sin(y) + cos(a)*cos(y) * this->y) + (cos(a)*sin(b)*sin(y) - sin(a)*cos(y) * this->z),
@@ -96,7 +98,7 @@ public:
         return *this;
     }
 
-    vec pow(double n) {
+    vec pow(scalar n) {
         return vec(
             std::pow(x, n),
             std::pow(y, n),
@@ -108,13 +110,11 @@ public:
         return vec(x*x, y*y, z*z);
     }
 
-
-    double sum() {
+    scalar sum() {
         return x + y + z;
     }
 
-
-    vec clamp(double lo, double hi) {
+    vec clamp(scalar lo, scalar hi) {
         x = std::min(std::max(x, lo), hi);
         y = std::min(std::max(y, lo), hi);
         z = std::min(std::max(z, lo), hi);
@@ -124,10 +124,10 @@ public:
     vec reflect_around(const vec &normal) const;
 };
 
-vec operator*(double n, const vec &v) { return vec(v.x * n, v.y * n, v.z * n); }
-vec operator*(const vec &v, double n) { return vec(v.x * n, v.y * n, v.z * n); }
-vec operator/(double n, const vec &v) { return vec(v.x / n, v.y / n, v.z / n); }
-vec operator/(const vec &v, double n) { return vec(v.x / n, v.y / n, v.z / n); }
+vec operator*(scalar n, const vec &v) { return vec(v.x * n, v.y * n, v.z * n); }
+vec operator*(const vec &v, scalar n) { return vec(v.x * n, v.y * n, v.z * n); }
+vec operator/(scalar n, const vec &v) { return vec(v.x / n, v.y / n, v.z / n); }
+vec operator/(const vec &v, scalar n) { return vec(v.x / n, v.y / n, v.z / n); }
 
 vec vec::reflect_around(const vec &normal) const {
     return 2*this->dot(normal)*normal - *this;

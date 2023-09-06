@@ -14,8 +14,8 @@
 template<int CW, int CH>
 class Camera {
 public:
-    double fov = 65;
-    double aperature = 120;
+    scalar fov = 65;
+    scalar aperature = 120;
     int threadcnt = std::thread::hardware_concurrency();
     vec background_color = vec(0, 0, 0);
     vec ambient_light = vec(.1, .1, .1);
@@ -42,12 +42,12 @@ public:
             // light source or if the intersected object is behind the light
             // source, then calculate light. Otherwise there is shadow.
             vec destination = (light_origin - intersection).normalize();
-            double distance = scene.castray(intersection, destination).t;
+            scalar distance = scene.castray(intersection, destination).t;
             if (distance == INF || distance > (light_origin - intersection).norm()) {
                 vec reflection = (destination.reflect_around(normal)).normalize();
-                return mat->diffuse * std::max(0.0, destination.dot(normal)) +
-                       mat->specular * pow(std::max(0.0, reflection.dot(source)), 20) +
-                       .2 * raytrace(scene, intersection, reflection, depth-1);
+                return mat->diffuse * std::fmax(0.0, destination.dot(normal)) +
+                       mat->specular * pow(std::fmax(0.0, reflection.dot(source)), mat->shininess) +
+                       .1 * raytrace(scene, intersection, reflection, depth-1);
             }
             return vec(0, 0, 0);
         };
@@ -60,7 +60,7 @@ public:
             const int samples = 128;
             for (int i = 0; i < samples; ++i) {
                 // Generate random point on circle facing the intersection point.
-                double x, y;
+                scalar x, y;
                 do {
                     x = randreal(-light->radius, light->radius);
                     y = randreal(-light->radius, light->radius);
@@ -74,9 +74,9 @@ public:
 
     void render_pixel(const Scene &scene, int px, int py) {
         vec direction = vec(
-            (px - (double)CW/2) *  vw/CW,
+            (px - (scalar)CW/2) *  vw/CW,
             // We negate this so positive Y goes up and negative Y down in camera origin.
-            (py - (double)CH/2) * -vh/CH,
+            (py - (scalar)CH/2) * -vh/CH,
             // See https://en.wikipedia.org/wiki/Field_of_view#Photography
             1/(2*std::tan(fov/2 * (M_PI/180))/vw)
         ).rotate(this->direction.x, this->direction.y, this->direction.z);
@@ -89,8 +89,8 @@ public:
             for (int i = 0; i < samples; ++i) {
                 // Note each pixel has width vw/CW in viewport space.
                 vec neworigin = origin + vec(
-                    randreal(-(double)vw/CW / 2, (double)vw/CW / 2) * aperature,
-                    randreal(-(double)vw/CH / 2, (double)vw/CH / 2) * aperature, 0
+                    randreal(-(scalar)vw/CW / 2, (scalar)vw/CW / 2) * aperature,
+                    randreal(-(scalar)vw/CH / 2, (scalar)vw/CH / 2) * aperature, 0
                 );
                 vec focal_point = neworigin + direction*4;
                 color += raytrace(scene, neworigin, focal_point - neworigin) / samples;
@@ -137,7 +137,6 @@ public:
         auto end = std::chrono::high_resolution_clock::now();
         double ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
         std::cout << std::fixed << std::setprecision(2) << ms/1000 << " seconds elapsed\n";
-        std::cout << bvh_total << " - " << bvh_rejected << " (" << bvh_total / (double)(bvh_total-bvh_rejected) << ")\n";
 
         std::ofstream of("out.ppm");
         if (!of) assert(false);
