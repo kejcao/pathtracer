@@ -7,6 +7,7 @@ class Material {
 public:
     vec diffuse = vec(.5, .5, .5);
     vec specular = vec(1, 1, 1);
+    vec emission = vec(0, 0, 0);
     scalar shininess = 20;
     scalar index_of_refraction = 1;
 

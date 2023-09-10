@@ -5,7 +5,7 @@
 #include <cassert>
 #include <ostream>
 
-using scalar = double;
+using scalar = float;
 
 #define INF std::numeric_limits<scalar>::infinity()
 
@@ -21,6 +21,7 @@ public:
     scalar x = 0, y = 0, z = 0;
 
     vec() = default;
+    constexpr vec(scalar n) : x{n}, y{n}, z{n} { }
     constexpr vec(scalar x, scalar y, scalar z) : x{x}, y{y}, z{z} { }
     constexpr vec(const vec &v) : x{v.x}, y{v.y}, z{v.z} { };
 
@@ -85,9 +86,9 @@ public:
     // Should totally precompute the rotation matrix. Maybe make transformation class? TODO
     vec rotate(scalar a, scalar b, scalar y) const {
         return vec(
-            (cos(a)*cos(y) * this->x) + (sin(a)*sin(b)*cos(y) - cos(a)*sin(y) * this->y) + (cos(a)*sin(b)*cos(y) + sin(a)*sin(y) * this->z),
-            (cos(a)*sin(y) * this->x) + (sin(a)*sin(b)*sin(y) + cos(a)*cos(y) * this->y) + (cos(a)*sin(b)*sin(y) - sin(a)*cos(y) * this->z),
-                  (-sin(b) * this->x) +                        (sin(a)*cos(b) * this->y) +                        (cos(a)*cos(b) * this->z)
+            (cos(b)*cos(y) * this->x) + ((sin(a)*sin(b)*cos(y) - cos(a)*sin(y)) * this->y) + ((cos(a)*sin(b)*cos(y) + sin(a)*sin(y)) * this->z),
+            (cos(b)*sin(y) * this->x) + ((sin(a)*sin(b)*sin(y) + cos(a)*cos(y)) * this->y) + ((cos(a)*sin(b)*sin(y) - sin(a)*cos(y)) * this->z),
+                  (-sin(b) * this->x) +                          (sin(a)*cos(b) * this->y) +                          (cos(a)*cos(b) * this->z)
         );
     }
 

@@ -8,10 +8,12 @@
 #include <stdexcept>
 #include "objects.h"
 #include "materials.h"
+#include "util.h"
 
 namespace fs = std::filesystem;
 
 std::vector<Object *> parseobj(const std::string &filename) {
+    START();
     auto split = [](
         const std::string &s,
         const std::string &delim=" "
@@ -48,6 +50,13 @@ std::vector<Object *> parseobj(const std::string &filename) {
                 } else if (toks[0] == "Kd") {
                     assert(toks.size() == 4);
                     m->diffuse = vec(
+                        std::stof(toks[1]),
+                        std::stof(toks[2]),
+                        std::stof(toks[3])
+                    );
+                } else if (toks[0] == "Ke") {
+                    assert(toks.size() == 4);
+                    m->emission = vec(
                         std::stof(toks[1]),
                         std::stof(toks[2]),
                         std::stof(toks[3])
@@ -146,6 +155,7 @@ std::vector<Object *> parseobj(const std::string &filename) {
             p->init();
             objects.push_back(p);
         }
+        END(" to parse " + filename);
         return objects;
     } catch(std::invalid_argument &e) {
         throw std::runtime_error(filename + ": " + std::to_string(lineno) + ": parse error");

@@ -7,6 +7,9 @@
 #include <span>
 #include "math.h"
 #include "materials.h"
+#include "util.h"
+
+#define EPSILON 1e-3
 
 class AABB {
 public:
@@ -18,7 +21,7 @@ public:
     vec extent() const { return max - min; }
 
     bool intersect(vec origin, vec direction) const {
-        scalar tmin = 1e-8, tmax = INF;
+        scalar tmin = EPSILON, tmax = INF;
         for (int i = 0; i < 3; ++i) {
             if (direction[i] != 0) {
                 scalar n = 1 / direction[i];
@@ -38,6 +41,7 @@ struct HitData {
     scalar t;
     vec normal;
     const Object *obj;
+    int hits = 0;
 };
 
 class Object {
@@ -75,6 +79,13 @@ public:
         }
     };
 
+    // struct Data {
+    //     Object *obj;
+    //     AABB bbox;
+    //     vec centroid;
+    // };
+
+    // We store our tree as a flat array.
     std::vector<Object *> objects;
     std::vector<Node> nodes;
 
@@ -100,7 +111,8 @@ public:
             HitData closest = {INF};
             for (auto *obj : nodes[i].span(objects)) {
                 HitData hit = obj->intersect(origin, direction);
-                if (hit.t >= 1e-8 && hit.t < closest.t) {
+                if (hit.t >= EPSILON && hit.t < closest.t) {
+                    ++hit.hits;
                     closest = hit;
                 }
             }
@@ -110,6 +122,8 @@ public:
 
         HitData lhit = intersect(origin, direction, nodes[i].index);
         HitData rhit = intersect(origin, direction, nodes[i].index+1);
+        ++lhit.hits;
+        ++rhit.hits;
         return lhit.t < rhit.t ? lhit : rhit;
     }
 
@@ -161,6 +175,7 @@ private:
 
         // If we can't do that fall back to sorting it into two piles.
         if (midpoint == 0 || midpoint >= nodes[i].count-1) {
+            // O(n) compared to std::sort's O(n log n).
             std::nth_element(
                 start, start + nodes[i].count/2, start + nodes[i].count,
                 [axis](auto *a, auto *b) {
@@ -187,6 +202,10 @@ private:
         update_box(lhs+1);
         subdivide(lhs);
         subdivide(lhs+1);
+
+        // parallelize(0, 2, [&](int i) {
+        //     subdivide(lhs+i);
+        // });
     }
 };
 
@@ -197,8 +216,8 @@ public:
         vec vn0, vec vn1, vec vn2,
         bool smooth, Material *mat
     ) : Object(mat), v0{v0}, v1{v1}, v2{v2},
-        // vn0{vn0}, vn1{vn1}, vn2{vn2}, smooth{smooth} {
-         smooth{smooth} {
+        vn0{vn0}, vn1{vn1}, vn2{vn2}, smooth{smooth} {
+        //  smooth{smooth} {
 
         box = AABB(
             vec(
@@ -232,6 +251,7 @@ public:
         scalar v = q.dot(direction);
         if (v < 0 || u+v > 1) return {INF};
         // return {q.dot(e2), smooth ? (1-u-v)*vn0 + u*vn1 + v*vn2 : normal(), this};
+        // return {q.dot(e2), normal(), this};
         return {q.dot(e2), smooth ? (1-u-v)*v0 + u*v1 + v*v2 : normal(), this};
     }
 
@@ -239,7 +259,7 @@ public:
 
 private:
     vec v0, v1, v2;
-    // vec vn0, vn1, vn2;
+    vec vn0, vn1, vn2;
     bool smooth;
     AABB box;
 };
