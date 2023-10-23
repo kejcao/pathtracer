@@ -29,6 +29,10 @@ public:
         for (auto &&light : arealights) delete light;
     }
 
+    // AreaLight *random_light() const {
+    //     return arealights[rand() % arealights.size()];
+    // }
+
     HitData castray(vec origin, vec direction) const {
         return objects.intersect(origin, direction);
     }

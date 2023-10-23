@@ -13,166 +13,138 @@
 #include "scene.h"
 #include "util.h"
 
-template<int CW, int CH>
+enum {BVH, FLAT, PATHTRACE, RAYTRACE};
+
+template<int CW, int CH, int MODE=RAYTRACE>
 class Camera {
 public:
     scalar fov = 65;
-    scalar aperature = 50;
+    vec bgcolor = vec(0, 0, 0);
+
+    // Simulate depth of field (blurry background) effects?
+    bool DOF = true;
+
+    // If so define these variables.
+    scalar aperature = 2;
     scalar focal_distance = 4;
+    bool stratified = false;
+    int dof_samples = 512;
+
+    // int arealight_samples = DOF ? 512 / dof_samples : 512;
+    int arealight_samples = 1;
     int threadcnt = std::thread::hardware_concurrency();
+
     vec background_color = vec(0, 0, 0);
     vec ambient_light = vec(.1, .1, .1);
 
-    Camera(const vec &origin, const vec &direction) : origin{origin}, direction{direction} { }
+    Camera(const vec &origin, const vec &direction)
+        : origin{origin}, direction{direction} { }
 
-    vec pathtrace(const Scene &scene, vec origin, vec direction, int depth=4) {
-        if (depth <= 0) {
-            return vec(0, 0, 0);
-        }
+    vec pathtrace(const Scene &scene, vec origin, vec direction, int depth=0) {
         HitData hit = scene.castray(origin, direction);
-        if (hit.t == INF) {
-            return vec(0, 0, 0);
-        }
+        if (hit.t == INF) return bgcolor; // nothing hit?
 
-        auto mat = hit.obj->mat;
+        // return random direction (unit sphere)
+        auto random_direction = []() {
+            // rejection sampling is slower.
+            scalar x = randreal(0, 1);
+            scalar y = randreal(0, 1);
+            scalar phi = 1 - 2*x;
+            scalar theta = std::fmax(0, 1 - phi*phi);
+            return vec(
+                cos(2*M_PI*y) * sqrt(theta),
+                sin(2*M_PI*y) * sqrt(theta), phi
+            ).normalize();
 
-        // vec v;
-        // do {
-        //     v = vec(
-        //         randreal(-1, 1),
-        //         randreal(-1, 1),
-        //         randreal(-1, 1)
-        //     );
-        // } while(std::hypot(v.x, v.y, v.z) > 1);
-        // v = v.normalize();
-
-        scalar x = randreal(0, 1);
-        scalar y = randreal(0, 1);
-        scalar phi = 1 - 2*x;
-        scalar theta = std::fmax(0, 1 - phi*phi);
-        vec v = vec(
-            cos(2*M_PI*y) * sqrt(theta),
-            sin(2*M_PI*y) * sqrt(theta), phi
-        ).normalize();
-
-        vec intersection = origin + direction*hit.t;
-        vec normal = hit.normal.normalize();
-        vec source = (origin - intersection).normalize();
-
-        return 20*mat->emission + 2 * mat->diffuse * std::abs(direction.normalize().dot(v)) * pathtrace(scene, intersection, v, depth-1);
-    }
-
-    vec raytrace(const Scene &scene, vec origin, vec direction, int depth=1) {
-        if (depth <= 0) {
-            return vec(0, 0, 0);
-        }
-        HitData hit = scene.castray(origin, direction);
-        if (hit.t == INF) {
-            return background_color;
-        }
-
-        vec intersection = origin + direction*hit.t;
-        vec normal = hit.normal.normalize();
-        vec source = (origin - intersection).normalize();
-
-        auto mat = hit.obj->mat;
-
-        auto compute_illumination = [&](vec light_origin) -> vec {
-            // If there is no object between the intersection point and the
-            // light source or if the intersected object is behind the light
-            // source, then calculate light. Otherwise there is shadow.
-            vec destination = (light_origin - intersection).normalize();
-            scalar distance = scene.castray(intersection, destination).t;
-            if (distance == INF || distance > (light_origin - intersection).norm()) {
-                vec reflection = (destination.reflect_around(normal)).normalize();
-                return mat->diffuse * std::abs(destination.dot(normal)) +
-                       mat->specular * pow(std::fmax(0.0, reflection.dot(source)), mat->shininess) +
-                       .1 * raytrace(scene, intersection, reflection, depth-1);
-            }
-            return vec(0, 0, 0);
+            // scalar theta = 2 * M_PI * randreal(0, 1);
+            // scalar phi = std::acos(2 * randreal(0, 1) - 1);
+            // return vec(
+            //     std::sin(phi) * std::cos(theta),
+            //     std::sin(phi) * std::sin(theta), std::cos(phi)
+            // );
         };
 
-        vec color = ambient_light;
-        for (const auto &light : scene.pointlights) {
-            color += compute_illumination(light->origin);
+        // russian roulette!!!
+        const double probability = .9;
+        if (depth <= 4 || randreal(0,1) < probability) {
+            auto mat = hit.obj->mat;
+            vec brdf = mat->diffuse / M_PI;
+            vec v = random_direction();
+
+            // if not in hemisphere around normal, flip it.
+            // TODO normal should be to the outside of mesh.
+            if (hit.normal.dot(v) > 0) v = -v;
+
+            vec intersection = origin + direction*hit.t;
+            // corresponds to rendering equation.
+            return
+                mat->emission + 2 * M_PI * brdf *
+                ( // the irradiance
+                    std::abs(direction.normalize().dot(v)) *
+                    pathtrace(scene, intersection, v, depth+1)
+                ) / probability;
         }
-        for (const auto &light : scene.arealights) {
-            const int samples = 128;
-            // const int samples = 1024;
-            for (int i = 0; i < samples; ++i) {
-                // Generate random point on circle facing the intersection point.
-                scalar x, y;
-                do {
-                    x = randreal(-light->radius, light->radius);
-                    y = randreal(-light->radius, light->radius);
-                } while(std::hypot(x, y) > light->radius);
-                color += compute_illumination(light->origin + vec(x, y, 0)) / samples;
-            }
-        }
-        return color;
+        return vec(0, 0, 0);
     }
 
-    void render_pixel(const Scene &scene, int px, int py) {
-        vec direction = vec(
+    vec point_towards(int px, int py) {
+        return vec(
             (px - (scalar)CW/2) *  vw/CW,
             // We negate this so positive Y goes up and negative Y down in camera origin.
             (py - (scalar)CH/2) * -vh/CH,
             // See https://en.wikipedia.org/wiki/Field_of_view#Photography
             1/(2*std::tan(fov/2 * (M_PI/180))/vw)
-        ).rotate(this->direction.x, this->direction.y, this->direction.z);
+        ).rotate(direction);
+    }
 
+    void render_pixel(const Scene &scene, int px, int py) {
         vec color = vec(0, 0, 0);
-        enum {BVH, FLAT, PATHTRACE, RAYTRACE};
 
-        int VIEW_MODE = PATHTRACE;
-        switch (VIEW_MODE) {
-        case BVH:
-            color = vec((double)scene.castray(origin, direction).hits / 30);
-            break;
-        case FLAT: {
-            HitData hit = scene.castray(origin, direction);
-            if (hit.t != INF) color = hit.obj->mat->diffuse;
-            break;
+        const int samples = 128;
+        for (int i = 0; i < samples; ++i) {
+            color += pathtrace(scene, origin, direction);
         }
-        case PATHTRACE: {
-            const int samples = 1024;
-            for (int i = 0; i < samples; ++i) {
-                color += pathtrace(scene, origin, direction);
-            }
-            color /= samples;
-            break;
-        }
-        case RAYTRACE:
-            const int samples = 256;
-            vec focal_point = origin + direction*focal_distance;
-            for (int i = 0; i < samples; ++i) {
-                // Note each pixel has width vw/CW in viewport space.
-                vec neworigin = origin + vec(
-                    randreal(-(scalar)vw/CW / 2, (scalar)vw/CW / 2) * aperature,
-                    randreal(-(scalar)vw/CH / 2, (scalar)vw/CH / 2) * aperature, 0
-                );
-                color += raytrace(scene, neworigin, focal_point - neworigin) / samples;
-            }
-            break;
-        }
-        setpixel(px,py, color);
+        color /= samples;
     }
 
     void render(const Scene &scene, const std::string &filename) {
         START();
-        parallel_for(0, CH, [&](int py) {
-            for (int px = 0; px < CW; ++px) {
-                render_pixel(scene, px, py);
+
+        const int samples = 128;
+
+        for (int i = 0; i < samples; ++i) {
+            parallel_for(0, CH, [&](int py) {
+                for (int px = 0; px < CW; ++px) {
+                    vec dir = point_towards(px, py);
+                    // render_pixel(scene, px, py);
+                    pixels[py][px] += pathtrace(scene, origin, dir) * 10;
+                }
+            }, threadcnt);
+
+            std::cout << "\r" << i << "/" << samples;
+            std::cout.flush();
+        }
+        std::cout << "\r";
+
+        for (int i = 0; i < CH; ++i) {
+            for (int j = 0; j < CW; ++j) {
+                pixels[CH][CW] /= samples;
             }
-        }, threadcnt);
+        }
+
+
+        // frame /= samples;
         END("raytrace");
 
         std::ofstream of(filename);
         if (!of) assert(false);
         of << "P3\n" << CW << " " << CH << " 255" << "\n";
-        for (auto &&row : pixels) {
-            for (auto &&color : row) {
-                of << (color>>16 & 0xff) << " " << (color>>8 & 0xff) << " " << (color & 0xff) << "\n";
+        for (const auto &row : pixels) {
+            for (const auto &px : row) {
+                of << std::clamp((int)px.x, 0, 255) << " "
+                   << std::clamp((int)px.y, 0, 255) << " "
+                   << std::clamp((int)px.z, 0, 255) << "\n";
+                // of << (color>>16 & 0xff) << " " << (color>>8 & 0xff) << " " << (color & 0xff) << "\n";
             }
         }
     }
@@ -180,13 +152,13 @@ public:
 private:
     int vw = 1, vh = 1;
     vec origin, direction;
-    int pixels[CH][CW];
+    vec pixels[CH][CW];
 
     // RGB components should be between 0 and 1, not 0–255.
-    void setpixel(int px, int py, vec rgb) {
-        rgb = (rgb*255).floor().clamp(0, 255);
-        pixels[py][px] = (int)rgb.x<<16 | (int)rgb.y<<8 | (int)rgb.z;
-    }
+    // void setpixel(int px, int py, vec rgb) {
+    //     rgb = (rgb*255).floor().clamp(0, 255);
+    //     pixels[py][px] = (int)rgb.x<<16 | (int)rgb.y<<8 | (int)rgb.z;
+    // }
 };
 
 #endif

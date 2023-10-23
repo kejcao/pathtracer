@@ -1,5 +1,5 @@
 raytracer: main.cpp $(wildcard *.h)
-	g++ -std=c++20 -pedantic -Wall -O3 main.cpp -o $@
+	g++ -march=native -std=c++20 -pedantic -Wall -O3 main.cpp -o $@
 
 test: raytracer
 	./raytracer && sxiv *.ppm

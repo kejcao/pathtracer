@@ -59,8 +59,8 @@ void parallel_for(
             {
                 std::lock_guard<std::mutex> lock(m);
                 if ((i = start++) >= end) return;
-                std::cout << "\r" << i*100 / end << "%";
-                std::cout.flush();
+                // std::cout << "\r" << i*100 / end << "%";
+                // std::cout.flush();
             }
             f(i);
         }
@@ -72,7 +72,7 @@ void parallel_for(
         threads.push_back(std::thread(runner));
     runner();
     for (auto &&t : threads) t.join();
-    std::cout << "\r";
+    // std::cout << "\r";
 }
 
 #endif

@@ -18,7 +18,23 @@ public:
     AABB() = default;
     AABB(vec a, vec b) : min{a}, max{b} { }
 
+    void grow(AABB box) {
+        min = vec(
+            std::min(min.x, box.min.x),
+            std::min(min.y, box.min.y),
+            std::min(min.z, box.min.z)
+        );
+        max = vec(
+            std::max(max.x, box.max.x),
+            std::max(max.y, box.max.y),
+            std::max(max.z, box.max.z)
+        );
+    }
     vec extent() const { return max - min; }
+    double area() const {
+        vec v = extent().square();
+        return v.x * v.y * v.z;
+    }
 
     bool intersect(vec origin, vec direction) const {
         scalar tmin = EPSILON, tmax = INF;
@@ -57,6 +73,10 @@ public:
     }
 };
 
+enum {NAIVE, SBVH};
+constexpr int SPLIT = NAIVE;
+
+// BVH to speed up ray-surface intersections.
 class BVH {
 public:    
     unsigned int max_leaf_size = 8;
@@ -79,15 +99,9 @@ public:
         }
     };
 
-    // struct Data {
-    //     Object *obj;
-    //     AABB bbox;
-    //     vec centroid;
-    // };
-
-    // We store our tree as a flat array.
-    std::vector<Object *> objects;
+    // Tree is stored as a flat array.
     std::vector<Node> nodes;
+    std::vector<Object *> objects;
 
     BVH() = default;
     BVH(const std::vector<Object *> &objects) : objects{objects} {
@@ -157,32 +171,74 @@ private:
     void subdivide(int i) {
         if (nodes[i].count <= max_leaf_size) return;
 
-        int axis = 0;
-        vec extent = nodes[i].box.extent();
-        if (extent.y > extent.x) axis = 1;
-        if (extent.z > extent[axis]) axis = 2;
+        unsigned int midpoint;
+        switch (SPLIT) {
+        case NAIVE: {
+            // Estimate axis as one with greatest span.
+            int axis = 0;
+            vec extent = nodes[i].box.extent();
+            if (extent.y > extent.x) axis = 1;
+            if (extent.z > extent[axis]) axis = 2;
 
-        // Try to split it down the middle.
-        auto start = objects.begin() + nodes[i].first;
-        scalar mid = nodes[i].box.min[axis] + extent[axis] / 2;
-        auto iter = std::partition(
-            start, start + nodes[i].count,
-            [axis, mid](auto *obj) {
-                return obj->centroid()[axis] < mid;
-            }
-        );
-        unsigned int midpoint = std::distance(start, iter);
-
-        // If we can't do that fall back to sorting it into two piles.
-        if (midpoint == 0 || midpoint >= nodes[i].count-1) {
-            // O(n) compared to std::sort's O(n log n).
-            std::nth_element(
-                start, start + nodes[i].count/2, start + nodes[i].count,
-                [axis](auto *a, auto *b) {
-                    return a->centroid()[axis] < b->centroid()[axis];
+            // Try to split it down the middle.
+            auto start = objects.begin() + nodes[i].first;
+            scalar mid = nodes[i].box.min[axis] + extent[axis] / 2;
+            auto iter = std::partition(
+                start, start + nodes[i].count,
+                [axis, mid](auto *obj) {
+                    return obj->centroid()[axis] < mid;
                 }
             );
-            midpoint = nodes[i].count / 2;
+            midpoint = std::distance(start, iter);
+
+            // If we can't do that fall back to sorting it into two piles.
+            if (midpoint == 0 || midpoint >= nodes[i].count-1) {
+                // O(n) compared to std::sort's O(n log n).
+                std::nth_element(
+                    start, start + nodes[i].count/2, start + nodes[i].count,
+                    [axis](auto *a, auto *b) {
+                        return a->centroid()[axis] < b->centroid()[axis];
+                    }
+                );
+                midpoint = nodes[i].count / 2;
+            }
+            break;
+        }
+        case SBVH:
+            break;
+            // scalar bestcost = INF;
+            // std::vector<Triangle *> bestl, bestr;
+            // for (int axis = 0; axis < 3; ++axis) {
+            //     for (const auto &candidate : nodes[i].span(objects)) {
+            //         std::nth_element(
+            //             start, start + nodes[i].count/2, start + nodes[i].count,
+            //             [axis](auto *a, auto *b) {
+            //                 return a->centroid()[axis] < b->centroid()[axis];
+            //             }
+            //         );
+            //         midpoint = nodes[i].count / 2;
+
+            //         int l = 0, r = 0;
+            //         AABB lbox, rbox;
+            //         for (const auto *t : nodes[i].span(objects)) {
+            //             if (t->centroid()[axis] < candidate->centroid()[axis]) {
+            //                 ++l;
+            //                 lbox.grow(t->bbox());
+            //             } else {
+            //                 ++r;
+            //                 rbox.grow(t->bbox());
+            //             }
+            //         }
+
+            //         scalar cost = l*lbox.area() + r*rbox.area();
+            //         if (cost > 0 && cost < bestcost) {
+            //             bestcost = cost;
+            //             bestaxis = axis;
+            //             bestpos = 0;
+            //         }
+            //     }
+            // }
+            // break;
         }
 
         // Create children, update boxes, and recurse.

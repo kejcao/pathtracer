@@ -91,6 +91,10 @@ public:
                   (-sin(b) * this->x) +                          (sin(a)*cos(b) * this->y) +                          (cos(a)*cos(b) * this->z)
         );
     }
+    vec rotate(vec v) const {
+        return vec(x, y, z).rotate(v.x, v.y, v.z);
+    }
+
 
     vec floor() {
         x = (int)x;
