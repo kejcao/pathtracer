@@ -13,9 +13,7 @@
 #include "scene.h"
 #include "util.h"
 
-enum {BVH, FLAT, PATHTRACE, RAYTRACE};
-
-template<int CW, int CH, int MODE=RAYTRACE>
+template<int OUTW, int OUTH>
 class Camera {
 public:
     scalar fov = 65;
@@ -37,7 +35,7 @@ public:
     vec background_color = vec(0, 0, 0);
     vec ambient_light = vec(.1, .1, .1);
 
-    Camera(const vec &origin, const vec &direction)
+    Camera(const vec &origin, const vec &direction=vec(0,0,0))
         : origin{origin}, direction{direction} { }
 
     vec pathtrace(const Scene &scene, vec origin, vec direction, int depth=0) {
@@ -55,14 +53,9 @@ public:
                 cos(2*M_PI*y) * sqrt(theta),
                 sin(2*M_PI*y) * sqrt(theta), phi
             ).normalize();
-
-            // scalar theta = 2 * M_PI * randreal(0, 1);
-            // scalar phi = std::acos(2 * randreal(0, 1) - 1);
-            // return vec(
-            //     std::sin(phi) * std::cos(theta),
-            //     std::sin(phi) * std::sin(theta), std::cos(phi)
-            // );
         };
+
+        vec color = vec(0,0,0);
 
         // russian roulette!!!
         const double probability = .9;
@@ -77,47 +70,38 @@ public:
 
             vec intersection = origin + direction*hit.t;
             // corresponds to rendering equation.
-            return
+            color +=
                 mat->emission + 2 * M_PI * brdf *
                 ( // the irradiance
                     std::abs(direction.normalize().dot(v)) *
                     pathtrace(scene, intersection, v, depth+1)
                 ) / probability;
         }
-        return vec(0, 0, 0);
+        return color;
     }
 
     vec point_towards(int px, int py) {
         return vec(
-            (px - (scalar)CW/2) *  vw/CW,
+            (px - (scalar)OUTW/2) *  vw/OUTW,
             // We negate this so positive Y goes up and negative Y down in camera origin.
-            (py - (scalar)CH/2) * -vh/CH,
+            (py - (scalar)OUTH/2) * -vh/OUTH,
             // See https://en.wikipedia.org/wiki/Field_of_view#Photography
             1/(2*std::tan(fov/2 * (M_PI/180))/vw)
         ).rotate(direction);
     }
 
-    void render_pixel(const Scene &scene, int px, int py) {
-        vec color = vec(0, 0, 0);
-
-        const int samples = 128;
-        for (int i = 0; i < samples; ++i) {
-            color += pathtrace(scene, origin, direction);
-        }
-        color /= samples;
-    }
-
-    void render(const Scene &scene, const std::string &filename) {
+    void render(
+        const Scene &scene,
+        const std::string &outfp,
+        int samples = 64
+    ) {
         START();
 
-        const int samples = 128;
-
         for (int i = 0; i < samples; ++i) {
-            parallel_for(0, CH, [&](int py) {
-                for (int px = 0; px < CW; ++px) {
+            parallel_for(0, OUTH, [&](int py) {
+                for (int px = 0; px < OUTW; ++px) {
                     vec dir = point_towards(px, py);
-                    // render_pixel(scene, px, py);
-                    pixels[py][px] += pathtrace(scene, origin, dir) * 10;
+                    pixels[py][px] += pathtrace(scene, origin, dir) * 255;
                 }
             }, threadcnt);
 
@@ -126,25 +110,22 @@ public:
         }
         std::cout << "\r";
 
-        for (int i = 0; i < CH; ++i) {
-            for (int j = 0; j < CW; ++j) {
-                pixels[CH][CW] /= samples;
+        for (auto &row : pixels) {
+            for (auto &px : row) {
+                px /= samples;
             }
         }
 
-
-        // frame /= samples;
         END("raytrace");
 
-        std::ofstream of(filename);
+        std::ofstream of(outfp);
         if (!of) assert(false);
-        of << "P3\n" << CW << " " << CH << " 255" << "\n";
+        of << "P3\n" << OUTW << " " << OUTH << " 255" << "\n";
         for (const auto &row : pixels) {
             for (const auto &px : row) {
-                of << std::clamp((int)px.x, 0, 255) << " "
-                   << std::clamp((int)px.y, 0, 255) << " "
-                   << std::clamp((int)px.z, 0, 255) << "\n";
-                // of << (color>>16 & 0xff) << " " << (color>>8 & 0xff) << " " << (color & 0xff) << "\n";
+                of << std::clamp((int)std::round(px.x), 0, 255) << " "
+                   << std::clamp((int)std::round(px.y), 0, 255) << " "
+                   << std::clamp((int)std::round(px.z), 0, 255) << "\n";
             }
         }
     }
@@ -152,13 +133,7 @@ public:
 private:
     int vw = 1, vh = 1;
     vec origin, direction;
-    vec pixels[CH][CW];
-
-    // RGB components should be between 0 and 1, not 0–255.
-    // void setpixel(int px, int py, vec rgb) {
-    //     rgb = (rgb*255).floor().clamp(0, 255);
-    //     pixels[py][px] = (int)rgb.x<<16 | (int)rgb.y<<8 | (int)rgb.z;
-    // }
+    vec pixels[OUTH][OUTW];
 };
 
 #endif

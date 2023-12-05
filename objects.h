@@ -9,6 +9,7 @@
 #include "materials.h"
 #include "util.h"
 
+
 #define EPSILON 1e-3
 
 class AABB {
@@ -320,50 +321,37 @@ private:
     AABB box;
 };
 
+#include <assimp/mesh.h>
+#include <assimp/scene.h>
+
 class Polygon : public Object {
 public:
-    std::vector<vec> vertices, vnormals;
-    std::vector<std::vector<std::array<unsigned int, 2>>> faces;
-    bool smooth = false;
-    std::vector<Object *> triangles;
+    Polygon(const aiMesh* m, Material *mat) {
+        // be wary: `m` will be deleted before Polygon destruction
 
-    // This function should be called each time `faces` vector is modified.
-    void init() {
-        // Triangularize polygon.
-        // TODO only works for convex polygons.
-        auto addtriangle = [&](
-            std::array<unsigned int, 2> v1,
-            std::array<unsigned int, 2> v2,
-            std::array<unsigned int, 2> v3
-        ) {
-            triangles.push_back(new Triangle(
-                vertices[v1[0]], vertices[v2[0]], vertices[v3[0]],
-                v1[1] < vnormals.size() ? vnormals[v1[1]] : vertices[v1[0]],
-                v2[1] < vnormals.size() ? vnormals[v2[1]] : vertices[v2[0]],
-                v3[1] < vnormals.size() ? vnormals[v3[1]] : vertices[v3[0]],
-                smooth, mat
-            ));
-        };
-        decltype(faces) newfaces;
-        for (const auto &face : faces) {
-            if (face.size() > 3) {
-                auto pivot = face[0];
-                for (size_t i = 1; i < face.size()-1; ++i) {
-                    newfaces.push_back({pivot, face[i], face[i+1]});
-                    addtriangle(pivot, face[i], face[i+1]);
-                }
-            } else {
-                newfaces.push_back({face[0], face[1], face[2]});
-                addtriangle(face[0], face[1], face[2]);
-            }
+        auto *v = m->mVertices;
+        for (size_t i = 0; i < m->mNumVertices; ++i) {
+            vertices.push_back(vec(v[i].x, v[i].y, v[i].z));
         }
-        faces = newfaces;
 
-        // Reconstruct BVH.
+        auto *f = m->mFaces;
+        for (size_t i = 0; i < m->mNumFaces; ++i) {
+            assert (f[i].mNumIndices == 3);
+            faces.push_back({f[i].mIndices[0], f[i].mIndices[1], f[i].mIndices[2]});
+        }
+
+        for (const auto &f : faces) {
+            assert (f.size() == 3); // assume faces are triangles
+
+            // TODO: Triangle seems space inefficient
+            triangles.push_back(new Triangle(
+                vertices[f[0]], vertices[f[1]], vertices[f[2]],
+                vec(0,0,0), vec(0,0,0), vec(0,0,0), smooth, mat
+            ));
+        }
+
         bvh = BVH(triangles);
     }
-
-    Polygon() = default;
 
     AABB bbox() const override { return bvh.bbox(); }
     HitData intersect(vec origin, vec direction) const override {
@@ -371,6 +359,13 @@ public:
     }
 
 private:
+    std::vector<vec> vertices, vnormals;
+    std::vector<std::vector<unsigned int>> faces;
+    bool smooth = false;
+
+    // TODO we only need BVH, not triangles array or other stuff
+    std::vector<Object *> triangles;
+
     BVH bvh;
 };
 
