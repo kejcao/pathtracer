@@ -1,6 +1,7 @@
 #ifndef SCENE_H
 #define SCENE_H
 
+#include <memory>
 #include <vector>
 
 #include <assimp/postprocess.h>
@@ -65,28 +66,28 @@ public:
 
         // TODO: scene->mCameras;
 
-        std::vector<Object *> objs;
+        std::vector<std::unique_ptr<Object>> objs;
 
         auto **p = scene->mMeshes;
         for (size_t i = 0; i < scene->mNumMeshes; ++i) {
-            objs.push_back(new Polygon(p[i], materials[p[i]->mMaterialIndex]));
+            objs.push_back(std::make_unique<Polygon>(p[i], materials[p[i]->mMaterialIndex]));
         }
 
-        objects = BVH(objs);
+        objects = BVH(std::move(objs));
     }
 
-    Scene(
-        const std::vector<Object *> &objects,
-        const std::vector<LightSource *> &lights
-    ) : objects{objects} {
-        for (auto *l : lights) {
-            if (dynamic_cast<PointLight *>(l) != nullptr) {
-                pointlights.push_back((PointLight *)l);
-            } else if (dynamic_cast<AreaLight *>(l) != nullptr) {
-                arealights.push_back((AreaLight *)l);
-            }
-        }
-    }
+    // Scene(
+    //     const std::vector<Object *> &objects,
+    //     const std::vector<LightSource *> &lights
+    // ) : objects{objects} {
+    //     for (auto *l : lights) {
+    //         if (dynamic_cast<PointLight *>(l) != nullptr) {
+    //             pointlights.push_back((PointLight *)l);
+    //         } else if (dynamic_cast<AreaLight *>(l) != nullptr) {
+    //             arealights.push_back((AreaLight *)l);
+    //         }
+    //     }
+    // }
 
     ~Scene() {
         for (auto &&light : pointlights) delete light;

@@ -4,11 +4,11 @@
 #include <array>
 #include <iostream>
 #include <algorithm>
+#include <memory>
 #include <span>
 #include "math.h"
 #include "materials.h"
 #include "util.h"
-
 
 #define EPSILON 1e-3
 
@@ -63,21 +63,18 @@ struct HitData {
 
 class Object {
 public:
-    Material *mat;
+    Material *mat; // TODO: i'm not sure what's happening here
     Object(Material *mat=new Material()) : mat{mat} {}
-    virtual ~Object() { delete mat; }
 
+    // all objects must have a bounding box (for BVH) and be intersectable
     virtual AABB bbox() const = 0;
     virtual HitData intersect(vec origin, vec direction) const = 0;
+
     vec centroid() const {
         return .5 * bbox().min + .5 * bbox().max;
     }
 };
 
-enum {NAIVE, SBVH};
-constexpr int SPLIT = NAIVE;
-
-// BVH to speed up ray-surface intersections.
 class BVH {
 public:    
     unsigned int max_leaf_size = 8;
@@ -93,38 +90,37 @@ public:
         AABB box;
 
         bool is_leaf() const { return count > 0; }
-        auto span(const std::vector<Object *> &objs) const {
+        auto span(const auto &objs) const {
             assert(first + count <= objs.size());
             auto start = objs.begin() + first;
             return std::span(start, start + count);
         }
     };
 
-    // Tree is stored as a flat array.
+    // tree is stored as a flat array
     std::vector<Node> nodes;
-    std::vector<Object *> objects;
+    std::vector<std::unique_ptr<Object>> objects;
 
     BVH() = default;
-    BVH(const std::vector<Object *> &objects) : objects{objects} {
-        if (objects.size() != 0) {
-            nodes.push_back({
-                .first = 0,
-                .count = (unsigned int)objects.size()
-            });
-            update_box(0);
-            subdivide(0);
-        }
-    }
-    ~BVH() {
-        // TODO double free when we do this—why?
-        // for (auto &&obj : objects) delete obj;
+    BVH(auto objs) : objects{std::move(objs)} {
+        assert (!objects.empty());
+
+        // create first node that spans entire object list
+        nodes.push_back({
+            .first = 0,
+            .count = (unsigned int)objects.size()
+        });
+
+        // then recursively subdivide this node to create the tree
+        update_box(0);
+        subdivide(0);
     }
 
     HitData intersect(vec origin, vec direction, int i=0) const {
         if (objects.size() == 0) return {INF};
         if (nodes[i].is_leaf()) {
             HitData closest = {INF};
-            for (auto *obj : nodes[i].span(objects)) {
+            for (const auto &obj : nodes[i].span(objects)) {
                 HitData hit = obj->intersect(origin, direction);
                 if (hit.t >= EPSILON && hit.t < closest.t) {
                     ++hit.hits;
@@ -148,12 +144,13 @@ public:
     }
 
 private:
+
     void update_box(int i) {
         nodes[i].box = AABB(
             vec( INF,  INF,  INF),
             vec(-INF, -INF, -INF)
         );
-        for (auto *obj : nodes[i].span(objects)) {
+        for (const auto &obj : nodes[i].span(objects)) {
             auto omin = obj->bbox().min;
             auto omax = obj->bbox().max;
             nodes[i].box.min = vec(
@@ -173,73 +170,34 @@ private:
         if (nodes[i].count <= max_leaf_size) return;
 
         unsigned int midpoint;
-        switch (SPLIT) {
-        case NAIVE: {
-            // Estimate axis as one with greatest span.
-            int axis = 0;
-            vec extent = nodes[i].box.extent();
-            if (extent.y > extent.x) axis = 1;
-            if (extent.z > extent[axis]) axis = 2;
 
-            // Try to split it down the middle.
-            auto start = objects.begin() + nodes[i].first;
-            scalar mid = nodes[i].box.min[axis] + extent[axis] / 2;
-            auto iter = std::partition(
-                start, start + nodes[i].count,
-                [axis, mid](auto *obj) {
-                    return obj->centroid()[axis] < mid;
+        // Estimate axis as one with greatest span.
+        int axis = 0;
+        vec extent = nodes[i].box.extent();
+        if (extent.y > extent.x) axis = 1;
+        if (extent.z > extent[axis]) axis = 2;
+
+        // Try to split it down the middle.
+        auto start = objects.begin() + nodes[i].first;
+        scalar mid = nodes[i].box.min[axis] + extent[axis] / 2;
+        auto iter = std::partition(
+            start, start + nodes[i].count,
+            [axis, mid](const auto &obj) {
+                return obj->centroid()[axis] < mid;
+            }
+        );
+        midpoint = std::distance(start, iter);
+
+        // If we can't do that fall back to sorting it into two piles.
+        if (midpoint == 0 || midpoint >= nodes[i].count-1) {
+            // O(n) compared to std::sort's O(n log n).
+            std::nth_element(
+                start, start + nodes[i].count/2, start + nodes[i].count,
+                [axis](const auto &a, const auto &b) {
+                    return a->centroid()[axis] < b->centroid()[axis];
                 }
             );
-            midpoint = std::distance(start, iter);
-
-            // If we can't do that fall back to sorting it into two piles.
-            if (midpoint == 0 || midpoint >= nodes[i].count-1) {
-                // O(n) compared to std::sort's O(n log n).
-                std::nth_element(
-                    start, start + nodes[i].count/2, start + nodes[i].count,
-                    [axis](auto *a, auto *b) {
-                        return a->centroid()[axis] < b->centroid()[axis];
-                    }
-                );
-                midpoint = nodes[i].count / 2;
-            }
-            break;
-        }
-        case SBVH:
-            break;
-            // scalar bestcost = INF;
-            // std::vector<Triangle *> bestl, bestr;
-            // for (int axis = 0; axis < 3; ++axis) {
-            //     for (const auto &candidate : nodes[i].span(objects)) {
-            //         std::nth_element(
-            //             start, start + nodes[i].count/2, start + nodes[i].count,
-            //             [axis](auto *a, auto *b) {
-            //                 return a->centroid()[axis] < b->centroid()[axis];
-            //             }
-            //         );
-            //         midpoint = nodes[i].count / 2;
-
-            //         int l = 0, r = 0;
-            //         AABB lbox, rbox;
-            //         for (const auto *t : nodes[i].span(objects)) {
-            //             if (t->centroid()[axis] < candidate->centroid()[axis]) {
-            //                 ++l;
-            //                 lbox.grow(t->bbox());
-            //             } else {
-            //                 ++r;
-            //                 rbox.grow(t->bbox());
-            //             }
-            //         }
-
-            //         scalar cost = l*lbox.area() + r*rbox.area();
-            //         if (cost > 0 && cost < bestcost) {
-            //             bestcost = cost;
-            //             bestaxis = axis;
-            //             bestpos = 0;
-            //         }
-            //     }
-            // }
-            // break;
+            midpoint = nodes[i].count / 2;
         }
 
         // Create children, update boxes, and recurse.
@@ -259,10 +217,6 @@ private:
         update_box(lhs+1);
         subdivide(lhs);
         subdivide(lhs+1);
-
-        // parallelize(0, 2, [&](int i) {
-        //     subdivide(lhs+i);
-        // });
     }
 };
 
@@ -274,7 +228,6 @@ public:
         bool smooth, Material *mat
     ) : Object(mat), v0{v0}, v1{v1}, v2{v2},
         vn0{vn0}, vn1{vn1}, vn2{vn2}, smooth{smooth} {
-        //  smooth{smooth} {
 
         box = AABB(
             vec(
@@ -329,6 +282,10 @@ public:
     Polygon(const aiMesh* m, Material *mat) {
         // be wary: `m` will be deleted before Polygon destruction
 
+        std::vector<vec> vertices, vnormals;
+        std::vector<std::vector<unsigned int>> faces;
+        bool smooth = false;
+
         auto *v = m->mVertices;
         for (size_t i = 0; i < m->mNumVertices; ++i) {
             vertices.push_back(vec(v[i].x, v[i].y, v[i].z));
@@ -340,17 +297,23 @@ public:
             faces.push_back({f[i].mIndices[0], f[i].mIndices[1], f[i].mIndices[2]});
         }
 
+        std::vector<std::unique_ptr<Object>> triangles;
+
         for (const auto &f : faces) {
             assert (f.size() == 3); // assume faces are triangles
 
             // TODO: Triangle seems space inefficient
-            triangles.push_back(new Triangle(
+            triangles.push_back(std::make_unique<Triangle>(
                 vertices[f[0]], vertices[f[1]], vertices[f[2]],
                 vec(0,0,0), vec(0,0,0), vec(0,0,0), smooth, mat
             ));
         }
 
-        bvh = BVH(triangles);
+        bvh = BVH(std::move(triangles));
+    }
+
+    ~Polygon() {
+        std::cout << "started\n";
     }
 
     AABB bbox() const override { return bvh.bbox(); }
@@ -359,12 +322,6 @@ public:
     }
 
 private:
-    std::vector<vec> vertices, vnormals;
-    std::vector<std::vector<unsigned int>> faces;
-    bool smooth = false;
-
-    // TODO we only need BVH, not triangles array or other stuff
-    std::vector<Object *> triangles;
 
     BVH bvh;
 };
