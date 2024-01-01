@@ -6,34 +6,32 @@
 #include <mutex>
 #include <iostream>
 #include <fstream>
-#include <iomanip>
+#include <format>
 #include "lights.h"
 #include "math.h"
 #include "objects.h"
 #include "scene.h"
 #include "util.h"
+#include "progress.h"
+
+#include "libattopng/libattopng.h"
 
 template<int OUTW, int OUTH>
 class Camera {
 public:
-    scalar fov = 65;
+    int threadcnt = std::thread::hardware_concurrency();
     vec bgcolor = vec(0, 0, 0);
 
-    // Simulate depth of field (blurry background) effects?
-    bool DOF = true;
+    scalar fov = 65;
 
-    // If so define these variables.
-    scalar aperature = 2;
-    scalar focal_distance = 4;
-    bool stratified = false;
-    int dof_samples = 512;
-
-    // int arealight_samples = DOF ? 512 / dof_samples : 512;
-    int arealight_samples = 1;
-    int threadcnt = std::thread::hardware_concurrency();
-
-    vec background_color = vec(0, 0, 0);
-    vec ambient_light = vec(.1, .1, .1);
+    // TODO!
+    // // Simulate depth of field (blurry background) effects?
+    // bool DOF = true;
+    // // If so define these variables.
+    // scalar aperature = 2;
+    // scalar focal_distance = 4;
+    // bool stratified = false;
+    // int dof_samples = 512;
 
     Camera(const vec &origin, const vec &direction=vec(0,0,0))
         : origin{origin}, direction{direction} { }
@@ -93,47 +91,54 @@ public:
     void render(
         const Scene &scene,
         const std::string &outfp,
-        int samples = 64
+        int samples = 2,
+        std::function<void(Camera *c, int i)> cb = nullptr
     ) {
-        START();
+        Progress p = Progress(samples);
 
         for (int i = 0; i < samples; ++i) {
             parallel_for(0, OUTH, [&](int py) {
                 for (int px = 0; px < OUTW; ++px) {
                     vec dir = point_towards(px, py);
-                    pixels[py][px] += pathtrace(scene, origin, dir) * 255;
+                    pixels[py][px] += pathtrace(scene, origin, dir) * 255 / samples;
                 }
             }, threadcnt);
 
-            std::cout << "\r" << i << "/" << samples;
-            std::cout.flush();
-        }
-        std::cout << "\r";
+            p.increment();
 
-        for (auto &row : pixels) {
-            for (auto &px : row) {
-                px /= samples;
+            if (i % 8 == 0) {
+                save(std::format("output/result-{:03}.png", i));
+                if (cb != nullptr) {
+                    cb(this, i);
+                }
             }
         }
 
-        END("raytrace");
-
-        std::ofstream of(outfp);
-        if (!of) assert(false);
-        of << "P3\n" << OUTW << " " << OUTH << " 255" << "\n";
-        for (const auto &row : pixels) {
-            for (const auto &px : row) {
-                of << std::clamp((int)std::round(px.x), 0, 255) << " "
-                   << std::clamp((int)std::round(px.y), 0, 255) << " "
-                   << std::clamp((int)std::round(px.z), 0, 255) << "\n";
-            }
-        }
+        save("output/result.png");
     }
 
 private:
     int vw = 1, vh = 1;
     vec origin, direction;
     vec pixels[OUTH][OUTW];
+
+    void save(const std::string &filename) {
+        libattopng_t *png = libattopng_new(OUTW,OUTH, PNG_RGB);
+        #define RGB(r, g, b) ((r) | ((g) << 8) | ((b) << 16))
+
+        int x, y;
+        for (y = 0; y < OUTH; y++) {
+            for (x = 0; x < OUTW; x++) {
+                libattopng_set_pixel(png, x,y, RGB(
+                    std::clamp((int)std::round(pixels[y][x].x), 0, 255),
+                    std::clamp((int)std::round(pixels[y][x].y), 0, 255),
+                    std::clamp((int)std::round(pixels[y][x].z), 0, 255)
+                ));
+            }
+        }
+        libattopng_save(png, filename.c_str());
+        libattopng_destroy(png);
+    }
 };
 
 #endif
