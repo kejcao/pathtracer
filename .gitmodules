@@ -1,0 +1,3 @@
+[submodule "libattopng"]
+	path = libattopng
+	url = https://github.com/misc0110/libattopng

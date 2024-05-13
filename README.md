@@ -1,6 +1,10 @@
+# Pathtracer
+
+I wrote a pathtracer to mostly practice my C++ skills. Definitely not complete, very slow, barely works.
+
 # Resources
 
-A list of resources I have found useful.
+A list of resources I have found useful. For future me.
 
 - [On building BVHs.](https://jacco.ompf2.com/2022/04/13/how-to-build-a-bvh-part-1-basics/).
 - [On sampling both area lights and DOF.](https://courses.cs.washington.edu/courses/cse557/17au/assets/lectures/aa-and-mcpt-4pp.pdf).

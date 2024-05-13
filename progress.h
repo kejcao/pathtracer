@@ -1,15 +1,13 @@
-#include <iostream>
 #include <chrono>
 #include <format>
+#include <iostream>
 
 class Progress {
     using MS = std::chrono::milliseconds;
     using clock = std::chrono::steady_clock;
 
 public:
-    Progress(int total) : total{total} {
-        start = clock::now();
-    }
+    Progress(int total) : total{total} { start = clock::now(); }
 
     void increment() {
         progress += 1;
@@ -25,11 +23,10 @@ public:
             return;
         }
 
-        // std::cout << std::format("\r{}/{} (ETA {})", progress, total, std::round((double)(total-progress)/total * ms / 1000));
         std::cout << std::format("\r{}/{}", progress, total);
         std::cout.flush();
     }
-    
+
 private:
     int total, progress = 0;
     std::chrono::time_point<clock> start;

@@ -1,12 +1,14 @@
 CC = g++
-FLAGS = -std=c++20 -pedantic -Wall -lassimp
-LIBS = libattopng/libattopng.c
+FLAGS = -pedantic -Wall
 
 raytracer: main.cpp $(wildcard *.h)
-	$(CC) $(LIBS) -march=native -O3 $(FLAGS) main.cpp -o $@
+	$(CC) $(FLAGS) -c libattopng/libattopng.c -o libatto.o
+	$(CC) $(FLAGS) -std=c++23 -lassimp libatto.o -march=native -O3 main.cpp -o $@
 
 run: raytracer
-	./raytracer && sxiv *.ppm
+	rm -f output/*
+	./raytracer
+	sxiv output/*
 
 clean:
-	rm -f raytracer *.png *.ppm
+	rm -f raytracer
