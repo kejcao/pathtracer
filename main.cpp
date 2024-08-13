@@ -5,22 +5,24 @@
 #include <QMainWindow>
 #include <QPushButton>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <iostream>
+#include <math.h>
 
 import camera;
 import scene;
 import object;
 import math;
 
-const auto s = Scene(parseobj("examples/redcube.obj"));
+const auto s = Scene(parseobj("examples/dragon.obj"));
 auto cam = Camera(vec(0, 0, 0));
 
 class RenderThread : public QThread {
   Q_OBJECT
 
 public:
-  // RenderThread(Pathtracer* pathtracer) : m_pathtracer(pathtracer) {}
+  RenderThread() {}
 
 signals:
   void updateSignal(const QImage &image);
@@ -55,63 +57,114 @@ public:
     QWidget *centralWidget = new QWidget(this);
     QVBoxLayout *layout = new QVBoxLayout(centralWidget);
 
-    m_imageLabel = new QLabel(this);
-    layout->addWidget(m_imageLabel);
-
-    m_renderButton = new QPushButton("Render", this);
-    connect(m_renderButton, &QPushButton::clicked, this,
-            &MainWindow::startRender);
-    layout->addWidget(m_renderButton);
+    imageLabel = new QLabel(this);
+    layout->addWidget(imageLabel);
 
     setCentralWidget(centralWidget);
 
-    m_renderThread = new RenderThread();
-    connect(m_renderThread, &RenderThread::updateSignal, this,
+    renderThread = new RenderThread();
+    connect(renderThread, &RenderThread::updateSignal, this,
             &MainWindow::updateImage);
+
+    auto movementTimer = new QTimer(this);
+    connect(movementTimer, &QTimer::timeout, this, &MainWindow::updateMovement);
+    movementTimer->start(16);
   }
 
-  ~MainWindow() { delete m_renderThread; }
+  ~MainWindow() { delete renderThread; }
 
 protected:
   void keyPressEvent(QKeyEvent *event) override {
-    switch (event->key()) {
-    case Qt::Key_W:
-      cam.origin.x += .2;
-      break;
-    case Qt::Key_S:
-      cam.origin.x -= .2;
-      break;
-    case Qt::Key_A:
-      cam.origin.z += .2;
-      break;
-    case Qt::Key_D:
-      cam.origin.z -= .2;
-      break;
-    default:
-      QMainWindow::keyPressEvent(event);
-      return;
+    if (!event->isAutoRepeat()) {
+      switch (event->key()) {
+      case Qt::Key_W:
+        movement.z = .2;
+        break;
+      case Qt::Key_S:
+        movement.z = -.2;
+        break;
+      case Qt::Key_A:
+        movement.x = -.2;
+        break;
+      case Qt::Key_D:
+        movement.x = .2;
+        break;
+      default:
+        QMainWindow::keyPressEvent(event);
+        return;
+      }
     }
     startRender();
   }
 
+  void keyReleaseEvent(QKeyEvent *event) override {
+    if (!event->isAutoRepeat()) {
+      switch (event->key()) {
+      case Qt::Key_W:
+      case Qt::Key_S:
+        movement.z = 0;
+        break;
+      case Qt::Key_A:
+      case Qt::Key_D:
+        movement.x = 0;
+        break;
+      default:
+        QMainWindow::keyPressEvent(event);
+        return;
+      }
+    }
+    startRender();
+  }
+
+  void mousePressEvent(QMouseEvent *event) override {
+    lastMousePos = event->pos();
+  }
+
+  void mouseMoveEvent(QMouseEvent *event) override {
+    if (event->buttons() & Qt::LeftButton) {
+      QPoint diff = event->pos() - lastMousePos;
+      lastMousePos = event->pos();
+
+      float sensitivity = 0.1f;
+      float yaw = diff.x() * sensitivity;
+
+      float pitch = -diff.y() * sensitivity;
+      pitch = std::max(-89.0f, std::min(89.0f, pitch)); // no flipping
+
+      cam.direction.y += yaw * M_PI / 180;
+      cam.direction.x += pitch * M_PI / 180;
+
+      startRender();
+    }
+  }
+
 private slots:
-  void startRender() { m_renderThread->start(); }
+  void startRender() { renderThread->start(); }
+
+  void updateMovement() {
+    if (movement != vec(0, 0, 0)) {
+      cam.origin += movement;
+      startRender();
+    }
+  }
 
   void updateImage(const QImage &image) {
-    m_imageLabel->setPixmap(QPixmap::fromImage(image));
+    imageLabel->setPixmap(QPixmap::fromImage(image));
   }
 
 private:
-  QLabel *m_imageLabel;
-  QPushButton *m_renderButton;
-  RenderThread *m_renderThread;
+  QLabel *imageLabel;
+  RenderThread *renderThread;
+  QPoint lastMousePos;
+  vec movement = vec(0, 0, 0);
 };
 
 int main(int argc, char *argv[]) {
-  QApplication app(argc, argv);
-  MainWindow window;
-  window.show();
-  return app.exec();
+// const auto s = Scene(parseobj("examples/dragon.obj"));
+//   QApplication app(argc, argv);
+//   MainWindow window;
+//   window.show();
+//   return app.exec();
 }
 
 #include "main.moc"
