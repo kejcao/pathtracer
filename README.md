@@ -2,7 +2,18 @@
 
 I wrote a pathtracer to mostly practice my C++ skills. Definitely not complete, very slow, barely works.
 
-# Resources
+## Installation
+
+To use,
+
+```bash
+$ mkdir build && cd build
+$ CXX=clang++ cmake -GNinja ..
+$ ninja
+$ cd .. && build/raytracer
+```
+
+## Resources
 
 A list of resources I have found useful. For future me.
 

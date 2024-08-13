@@ -1,35 +1,60 @@
-#ifndef CAMERA_H
-#define CAMERA_H
+module;
 
-#include "math.h"
-#include "objects.h"
+
+// #include "objects.h"
 #include "progress.h"
-#include "scene.h"
-#include "util.h"
-#include <cmath>
-#include <format>
-#include <fstream>
-#include <iostream>
-#include <mutex>
+// // #include "util.h"
+// #include <cmath>
 #include <thread>
+#include <math.h>
+#include <random>
+#include <functional>
 
-#include "libattopng/libattopng.h"
+// Loop from start (inclusive) to end (exclusive).
+void parallel_for(
+    int start, int end, std::function<void(int)> f,
+    int threadcnt=std::thread::hardware_concurrency()
+) {
+    std::mutex m;
+    auto runner = [&]() {
+        for (;;) {
+            int i;
+            {
+                std::lock_guard<std::mutex> lock(m);
+                if ((i = start++) >= end) return;
+                // std::cout << "\r" << i*100 / end << "%";
+                // std::cout.flush();
+            }
+            f(i);
+        }
+    };
+    std::vector<std::thread> threads;
+    // threadcnt - 1 since main thread counts as one too.
+    threadcnt = std::min(threadcnt-1, end - start - 1);
+    for (int i = 0; i < threadcnt; ++i)
+        threads.push_back(std::thread(runner));
+    runner();
+    for (auto &&t : threads) t.join();
+    // std::cout << "\r";
+}
 
-template <int OUTW, int OUTH> class Camera {
+export module camera;
+
+import math;
+import scene;
+import object;
+
+export class Camera {
 public:
   int threadcnt = std::thread::hardware_concurrency();
+  int OUTW = 256, OUTH = 256;
   vec bgcolor = vec(0, 0, 0);
+  vec pixels[256][256];
+
+  int vw = 1, vh = 1;
+  vec origin, direction;
 
   scalar fov = 65;
-
-  // TODO!
-  // // Simulate depth of field (blurry background) effects?
-  // bool DOF = true;
-  // // If so define these variables.
-  // scalar aperature = 2;
-  // scalar focal_distance = 4;
-  // bool stratified = false;
-  // int dof_samples = 512;
 
   Camera(const vec &origin, const vec &direction = vec(0, 0, 0))
       : origin{origin}, direction{direction} {}
@@ -38,6 +63,8 @@ public:
     HitData hit = scene.castray(origin, direction);
     if (hit.t == INF)
       return bgcolor; // nothing hit?
+    else
+      return vec(255,255,255);
 
     // return random direction (unit sphere)
     auto random_direction = []() {
@@ -87,9 +114,13 @@ public:
         .rotate(direction);
   }
 
-  void render(const Scene &scene, const std::string &outfp, int samples = 128,
-              std::function<void(Camera *c, int i)> cb = nullptr) {
+  void render(const Scene &scene, int samples = 128) {
+    // std::function<void(Camera *c, int i)> cb = nullptr) {
     Progress p = Progress(samples);
+
+    for (int py = 0; py < OUTH; ++py)
+      for (int px = 0; px < OUTW; ++px)
+        pixels[py][px] = vec(0, 0, 0);
 
     for (int i = 0; i < samples; ++i) {
       parallel_for(
@@ -97,46 +128,42 @@ public:
           [&](int py) {
             for (int px = 0; px < OUTW; ++px) {
               vec dir = point_towards(px, py);
-              pixels[py][px] += pathtrace(scene, origin, dir) * 255 / samples;
+              pixels[py][px] += pathtrace(scene, origin, dir) / samples;
             }
           },
           threadcnt);
 
       p.increment();
 
-      if (i % 8 == 0) {
-        save(std::format("output/result-{:03}.png", i));
-        if (cb != nullptr) {
-          cb(this, i);
-        }
-      }
+      // if (i % 8 == 0) {
+      //   save(std::format("output/result-{:03}.png", i));
+      //   // if (cb != nullptr) {
+      //   //   cb(this, i);
+      //   // }
+      // }
     }
 
-    save("output/result.png");
+    // save("output/result.png");
   }
-
-private:
-  int vw = 1, vh = 1;
-  vec origin, direction;
-  vec pixels[OUTH][OUTW];
-
+//
+// private:
+//   int vw = 1, vh = 1;
+//   vec origin, direction;
+//
   void save(const std::string &filename) {
-    libattopng_t *png = libattopng_new(OUTW, OUTH, PNG_RGB);
-#define RGB(r, g, b) ((r) | ((g) << 8) | ((b) << 16))
+    std::ofstream ofs(filename);
+
+    ofs << "P3\n";
+    ofs << OUTW << " " << OUTH << "\n";
+    ofs << 255 << "\n";
 
     int x, y;
     for (y = 0; y < OUTH; y++) {
       for (x = 0; x < OUTW; x++) {
-        libattopng_set_pixel(
-            png, x, y,
-            RGB(std::clamp((int)std::round(pixels[y][x].x), 0, 255),
-                std::clamp((int)std::round(pixels[y][x].y), 0, 255),
-                std::clamp((int)std::round(pixels[y][x].z), 0, 255)));
+        ofs << std::clamp((int)std::round(pixels[y][x].x), 0, 255) << " "
+            << std::clamp((int)std::round(pixels[y][x].y), 0, 255) << " "
+            << std::clamp((int)std::round(pixels[y][x].z), 0, 255) << "\n";
       }
     }
-    libattopng_save(png, filename.c_str());
-    libattopng_destroy(png);
   }
 };
-
-#endif

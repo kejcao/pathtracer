@@ -1,22 +1,22 @@
-#ifndef MATH_H
-#define MATH_H
+module;
 
 #include <cassert>
 #include <ostream>
 #include <random>
 
-using scalar = float;
+export module math;
 
-#define INF std::numeric_limits<scalar>::infinity()
+export using scalar = float;
+export constexpr auto INF = std::numeric_limits<scalar>::infinity();
 
-scalar randreal(scalar x, scalar y) {
+export scalar randreal(scalar x, scalar y) {
   static std::random_device rd;
   static std::mt19937 e2(rd());
   assert(x <= y);
   return std::uniform_real_distribution<>(x, y)(e2);
 }
 
-class vec {
+export class vec {
 public:
   scalar x = 0, y = 0, z = 0;
 
@@ -154,10 +154,10 @@ public:
   vec reflect_around(const vec &normal) const;
 };
 
-vec operator*(scalar n, const vec &v) { return vec(v.x * n, v.y * n, v.z * n); }
-vec operator*(const vec &v, scalar n) { return vec(v.x * n, v.y * n, v.z * n); }
-vec operator/(scalar n, const vec &v) { return vec(v.x / n, v.y / n, v.z / n); }
-vec operator/(const vec &v, scalar n) { return vec(v.x / n, v.y / n, v.z / n); }
+export vec operator*(scalar n, const vec &v) { return vec(v.x * n, v.y * n, v.z * n); }
+export vec operator*(const vec &v, scalar n) { return vec(v.x * n, v.y * n, v.z * n); }
+export vec operator/(scalar n, const vec &v) { return vec(v.x / n, v.y / n, v.z / n); }
+export vec operator/(const vec &v, scalar n) { return vec(v.x / n, v.y / n, v.z / n); }
 
 vec vec::reflect_around(const vec &normal) const {
   return 2 * this->dot(normal) * normal - *this;
@@ -166,5 +166,3 @@ vec vec::reflect_around(const vec &normal) const {
 std::ostream &operator<<(std::ostream &os, const vec &v) {
   return os << "[" << v.x << "," << v.y << "," << v.z << "]\n";
 }
-
-#endif
