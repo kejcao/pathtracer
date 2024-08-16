@@ -15,7 +15,10 @@ import scene;
 import object;
 import math;
 
-const auto s = Scene(parseobj("examples/dragon.obj"));
+const auto s = Scene(parseobj("examples/redcube.obj"));
+// const auto s = Scene(parseobj("examples/tea.obj"));
+//
+// const auto s = Scene(parseobj("examples/cornell-box.obj"));
 auto cam = Camera(vec(0, 0, 0));
 
 class RenderThread : public QThread {
@@ -30,20 +33,22 @@ signals:
 protected:
   void run() override {
     QImage image(256, 256, QImage::Format_RGB32);
-    cam.render(s, 1);
-
+    // cam.render(s, 8, [&, this](int y) {
+    //   for (int x = 0; x < 256; ++x) {
+    //     const auto c = cam.pixels[y][x];
+    //     image.setPixelColor(x, y, QColor(c.x, c.y, c.z));
+    //   }
+    //   emit updateSignal(image);
+    // });
+    cam.render(s, 8);
     for (int y = 0; y < 256; ++y) {
       for (int x = 0; x < 256; ++x) {
-        // auto [r,g,b] = cam.pixels[y][x];
         const auto c = cam.pixels[y][x];
         image.setPixelColor(x, y, QColor(c.x, c.y, c.z));
       }
-      emit updateSignal(image);
     }
+    emit updateSignal(image);
   }
-
-private:
-  // Camera* m_pathtracer;
 };
 
 class MainWindow : public QMainWindow {
@@ -89,12 +94,20 @@ protected:
       case Qt::Key_D:
         movement.x = .2;
         break;
+      case Qt::Key_Q:
+        movement.y = -.2;
+        break;
+      case Qt::Key_E:
+        movement.y = .2;
+        break;
+      case Qt::Key_R:
+        startRender();
+        break;
       default:
         QMainWindow::keyPressEvent(event);
         return;
       }
     }
-    startRender();
   }
 
   void keyReleaseEvent(QKeyEvent *event) override {
@@ -108,12 +121,15 @@ protected:
       case Qt::Key_D:
         movement.x = 0;
         break;
+      case Qt::Key_Q:
+      case Qt::Key_E:
+        movement.y = 0;
+        break;
       default:
         QMainWindow::keyPressEvent(event);
         return;
       }
     }
-    startRender();
   }
 
   void mousePressEvent(QMouseEvent *event) override {
@@ -134,7 +150,7 @@ protected:
       cam.direction.y += yaw * M_PI / 180;
       cam.direction.x += pitch * M_PI / 180;
 
-      startRender();
+      // startRender();
     }
   }
 
@@ -144,7 +160,6 @@ private slots:
   void updateMovement() {
     if (movement != vec(0, 0, 0)) {
       cam.origin += movement;
-      startRender();
     }
   }
 
@@ -160,11 +175,10 @@ private:
 };
 
 int main(int argc, char *argv[]) {
-// const auto s = Scene(parseobj("examples/dragon.obj"));
-//   QApplication app(argc, argv);
-//   MainWindow window;
-//   window.show();
-//   return app.exec();
+  QApplication app(argc, argv);
+  MainWindow window;
+  window.show();
+  return app.exec();
 }
 
 #include "main.moc"

@@ -2,13 +2,14 @@ module;
 
 #include <algorithm>
 #include <cassert>
-#include <iostream>
-#include <memory>
-#include <span>
-#include <fstream>
-#include <ranges>
-#include <map>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <print>
+#include <ranges>
+#include <span>
 #include <stdexcept>
 
 export module object;
@@ -70,11 +71,11 @@ public:
   }
 };
 
-export class Object;
+export class Triangle;
 export struct HitData {
   scalar t;
   vec normal;
-  const Object *obj;
+  const Triangle *obj;
   int hits = 0;
 };
 
@@ -271,203 +272,194 @@ private:
 
 class Polygon : public Object {
 public:
-    std::vector<vec> vertices, vnormals;
-    std::vector<std::vector<std::array<unsigned int, 2>>> faces;
-    bool smooth = false;
-    std::vector<Object *> triangles;
+  std::vector<vec> vertices, vnormals;
+  std::vector<std::vector<std::array<unsigned int, 2>>> faces;
+  bool smooth = false;
+  std::vector<Object *> triangles;
 
-    // This function should be called each time `faces` vector is modified.
-    void init() {
-        // Triangularize polygon.
-        // TODO only works for convex polygons.
-        auto addtriangle = [&](
-            std::array<unsigned int, 2> v1,
-            std::array<unsigned int, 2> v2,
-            std::array<unsigned int, 2> v3
-        ) {
-            triangles.push_back(new Triangle(
-                vertices[v1[0]], vertices[v2[0]], vertices[v3[0]],
-                v1[1] < vnormals.size() ? vnormals[v1[1]] : vertices[v1[0]],
-                v2[1] < vnormals.size() ? vnormals[v2[1]] : vertices[v2[0]],
-                v3[1] < vnormals.size() ? vnormals[v3[1]] : vertices[v3[0]],
-                smooth, mat
-            ));
-        };
-        decltype(faces) newfaces;
-        for (const auto &face : faces) {
-            if (face.size() > 3) {
-                auto pivot = face[0];
-                for (size_t i = 1; i < face.size()-1; ++i) {
-                    newfaces.push_back({pivot, face[i], face[i+1]});
-                    addtriangle(pivot, face[i], face[i+1]);
-                }
-            } else {
-                newfaces.push_back({face[0], face[1], face[2]});
-                addtriangle(face[0], face[1], face[2]);
-            }
+  // This function should be called each time `faces` vector is modified.
+  void init() {
+    // Triangularize polygon.
+    // TODO only works for convex polygons.
+    auto addtriangle = [&](std::array<unsigned int, 2> v1,
+                           std::array<unsigned int, 2> v2,
+                           std::array<unsigned int, 2> v3) {
+      triangles.push_back(new Triangle(
+          vertices[v1[0]], vertices[v2[0]], vertices[v3[0]],
+          v1[1] < vnormals.size() ? vnormals[v1[1]] : vertices[v1[0]],
+          v2[1] < vnormals.size() ? vnormals[v2[1]] : vertices[v2[0]],
+          v3[1] < vnormals.size() ? vnormals[v3[1]] : vertices[v3[0]], smooth,
+          mat));
+    };
+    decltype(faces) newfaces;
+    for (const auto &face : faces) {
+      if (face.size() > 3) {
+        auto pivot = face[0];
+        for (size_t i = 1; i < face.size() - 1; ++i) {
+          newfaces.push_back({pivot, face[i], face[i + 1]});
+          addtriangle(pivot, face[i], face[i + 1]);
         }
-        faces = newfaces;
-
-        // Reconstruct BVH.
-        bvh = BVH(triangles);
+      } else {
+        newfaces.push_back({face[0], face[1], face[2]});
+        addtriangle(face[0], face[1], face[2]);
+      }
     }
+    faces = newfaces;
 
-    Polygon() = default;
+    // Reconstruct BVH.
+    bvh = BVH(triangles);
+  }
 
-    AABB bbox() const override { return bvh.bbox(); }
-    HitData intersect(vec origin, vec direction) const override {
-        return bvh.intersect(origin, direction);
-    }
+  Polygon() = default;
+
+  AABB bbox() const override { return bvh.bbox(); }
+  // scalar area() const { // TODO is this just an estimate?
+  // }
+  HitData intersect(vec origin, vec direction) const override {
+    return bvh.intersect(origin, direction);
+  }
 
 private:
-    BVH bvh;
+  BVH bvh;
 };
 
-
 export std::vector<Object *> parseobj(const std::string &filename) {
-    auto split = [](
-        const std::string &s,
-        const std::string &delim=" "
-    ) {
-        std::vector<std::string> toks = {};
-        size_t i = 0, pi = 0;
-        while ((i = s.find(delim, pi)) != std::string::npos) {
-            // skip empty strings
-            // if (i-pi != 0) {
-                toks.push_back(s.substr(pi, i-pi));
-            // }
-            pi = i + delim.size();
-        }
-        toks.push_back(s.substr(pi));
-        return toks;
-    };
+  std::println("started parsing {}", filename);
+  auto split = [](const std::string &s, const std::string &delim = " ") {
+    std::vector<std::string> toks = {};
+    size_t i = 0, pi = 0;
+    while ((i = s.find(delim, pi)) != std::string::npos) {
+      // skip empty strings
+      // if (i-pi != 0) {
+      toks.push_back(s.substr(pi, i - pi));
+      // }
+      pi = i + delim.size();
+    }
+    toks.push_back(s.substr(pi));
+    return toks;
+  };
 
-    auto parsemtl = [&split](const std::string &filename, auto &materials) {
-        int lineno = 0;
-        try {
-            std::ifstream ifs(filename);
-            if (!ifs) assert(false);
-
-            Material *m;
-            std::string line;
-            while (std::getline(ifs, line)) {
-                ++lineno;
-                std::vector<std::string> toks = split(line);
-
-                if (toks[0] == "newmtl") {
-                    assert(toks.size() == 2);
-                    m = new Material();
-                    materials[toks[1]] = m;
-                } else if (toks[0] == "Kd") {
-                    assert(toks.size() == 4);
-                    m->diffuse = vec(
-                        std::stof(toks[1]),
-                        std::stof(toks[2]),
-                        std::stof(toks[3])
-                    );
-                } else if (toks[0] == "Ke") {
-                    assert(toks.size() == 4);
-                    m->emission = vec(
-                        std::stof(toks[1]),
-                        std::stof(toks[2]),
-                        std::stof(toks[3])
-                    );
-                } else if (toks[0] == "Ks") {
-                    assert(toks.size() == 4);
-                    m->specular = vec(
-                        std::stof(toks[1]),
-                        std::stof(toks[2]),
-                        std::stof(toks[3])
-                    );
-                } else if (toks[0] == "Ns") {
-                    assert(toks.size() == 2);
-                    m->shininess = std::stof(toks[1]);
-                } else if (toks[0] == "Ni") {
-                    assert(toks.size() == 2);
-                    m->index_of_refraction = std::stof(toks[1]);
-                }
-            }
-        } catch(std::invalid_argument &e) {
-            throw std::runtime_error(filename + ": " + std::to_string(lineno) + ": parse error");
-        }
-    };
-
+  auto parsemtl = [&split](const std::string &filename, auto &materials) {
     int lineno = 0;
     try {
-        std::ifstream ifs(filename);
-        if (!ifs) assert(false);
+      std::ifstream ifs(filename);
+      if (!ifs)
+        assert(false);
 
-        std::map<std::string, Material *> materials;
-        std::vector<Object *> objects;
-        int offset = 0;
-        Polygon *p = nullptr;
-        std::string line;
-        while (std::getline(ifs, line)) {
-            ++lineno;
-            std::vector<std::string> toks = split(line);
+      Material *m;
+      std::string line;
+      while (std::getline(ifs, line)) {
+        ++lineno;
+        std::vector<std::string> toks = split(line);
 
-            if (toks[0] == "o") {
-                if (p != nullptr) {
-                    p->init();
-                    objects.push_back(p);
-                    offset += p->vertices.size();
-                }
-                p = new Polygon();
-                continue;
-            } else if (toks[0] == "s") {
-                if (p == nullptr) p = new Polygon();
-                assert(toks.size() == 2);
-                if (toks[1] == "on") {
-                    p->smooth = true;
-                    continue;
-                } else if (toks[1] == "off") {
-                    p->smooth = false;
-                    continue;
-                }
-                p->smooth = std::stoi(toks[1]) == 1;
-            } else if (toks[0] == "v") {
-                if (p == nullptr) p = new Polygon();
-                assert(toks.size() == 4);
-                p->vertices.push_back(vec(
-                    std::stof(toks[1]),
-                    std::stof(toks[2]),
-                    std::stof(toks[3])
-                ));
-            } else if (toks[0] == "vn") {
-                if (p == nullptr) p = new Polygon();
-                assert(toks.size() == 4);
-                p->vnormals.push_back(vec(
-                    std::stof(toks[1]),
-                    std::stof(toks[2]),
-                    std::stof(toks[3])
-                ));
-            } else if(toks[0] == "f") {
-                if (p == nullptr) p = new Polygon();
-                std::vector<std::array<unsigned int, 2>> vs;
-                for (const auto &vertex : toks | std::views::drop(1)) {
-                    std::vector<std::string> toks = split(vertex, "/");
-                    assert(toks.size() >= 2 && toks.size() <= 4);
-                    vs.push_back({
-                        (unsigned int)std::stoi(toks[0])-1 - offset,
-                        toks.size() >= 3 ? (unsigned int)std::stoi(toks[2])-1 - offset : 0
-                    });
-                }
-                p->faces.push_back({vs});
-            } else if(toks[0] == "mtllib") {
-                assert(toks.size() == 2);
-                parsemtl(fs::path(filename).parent_path() / toks[1], materials);
-            } else if(toks[0] == "usemtl") {
-                if (p == nullptr) p = new Polygon();
-                assert(toks.size() == 2);
-                p->mat = materials[toks[1]];
-            }
+        if (toks[0] == "newmtl") {
+          assert(toks.size() == 2);
+          m = new Material();
+          materials[toks[1]] = m;
+        } else if (toks[0] == "Kd") {
+          assert(toks.size() == 4);
+          m->diffuse =
+              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+        } else if (toks[0] == "Ke") {
+          assert(toks.size() == 4);
+          m->emission =
+              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+        } else if (toks[0] == "Ks") {
+          assert(toks.size() == 4);
+          m->specular =
+              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+        } else if (toks[0] == "Ns") {
+          assert(toks.size() == 2);
+          m->shininess = std::stof(toks[1]);
+        } else if (toks[0] == "Ni") {
+          assert(toks.size() == 2);
+          m->index_of_refraction = std::stof(toks[1]);
         }
-        if (p != nullptr) {
-            p->init();
-            objects.push_back(p);
-        }
-        return objects;
-    } catch(std::invalid_argument &e) {
-        throw std::runtime_error(filename + ": " + std::to_string(lineno) + ": parse error");
+      }
+    } catch (std::invalid_argument &e) {
+      throw std::runtime_error(filename + ": " + std::to_string(lineno) +
+                               ": parse error");
     }
+  };
+
+  int lineno = 0;
+  try {
+    std::ifstream ifs(filename);
+    if (!ifs)
+      assert(false);
+
+    std::map<std::string, Material *> materials;
+    std::vector<Object *> objects;
+    int offset = 0;
+    Polygon *p = nullptr;
+    std::string line;
+    while (std::getline(ifs, line)) {
+      ++lineno;
+      std::vector<std::string> toks = split(line);
+
+      if (toks[0] == "o") {
+        if (p != nullptr) {
+          p->init();
+          objects.push_back(p);
+          offset += p->vertices.size();
+        }
+        p = new Polygon();
+        continue;
+      } else if (toks[0] == "s") {
+        if (p == nullptr)
+          p = new Polygon();
+        assert(toks.size() == 2);
+        if (toks[1] == "on") {
+          p->smooth = true;
+          continue;
+        } else if (toks[1] == "off") {
+          p->smooth = false;
+          continue;
+        }
+        p->smooth = std::stoi(toks[1]) == 1;
+      } else if (toks[0] == "v") {
+        if (p == nullptr)
+          p = new Polygon();
+        assert(toks.size() == 4);
+        p->vertices.push_back(
+            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3])));
+      } else if (toks[0] == "vn") {
+        if (p == nullptr)
+          p = new Polygon();
+        assert(toks.size() == 4);
+        p->vnormals.push_back(
+            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3])));
+      } else if (toks[0] == "f") {
+        if (p == nullptr)
+          p = new Polygon();
+        std::vector<std::array<unsigned int, 2>> vs;
+        for (const auto &vertex : toks | std::views::drop(1)) {
+          std::vector<std::string> toks = split(vertex, "/");
+          assert(toks.size() >= 2 && toks.size() <= 4);
+          vs.push_back({(unsigned int)std::stoi(toks[0]) - 1 - offset,
+                        toks.size() >= 3
+                            ? (unsigned int)std::stoi(toks[2]) - 1 - offset
+                            : 0});
+        }
+        p->faces.push_back({vs});
+      } else if (toks[0] == "mtllib") {
+        assert(toks.size() == 2);
+        parsemtl(fs::path(filename).parent_path() / toks[1], materials);
+      } else if (toks[0] == "usemtl") {
+        if (p == nullptr)
+          p = new Polygon();
+        assert(toks.size() == 2);
+        p->mat = materials[toks[1]];
+      }
+    }
+    if (p != nullptr) {
+      p->init();
+      objects.push_back(p);
+    }
+    std::println("done parsing {}", filename);
+    return objects;
+  } catch (std::invalid_argument &e) {
+    throw std::runtime_error(filename + ": " + std::to_string(lineno) +
+                             ": parse error");
+  }
 }
