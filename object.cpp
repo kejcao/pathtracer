@@ -11,6 +11,7 @@ module;
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <utility>
 
 export module object;
 
@@ -74,9 +75,8 @@ public:
 export class Triangle;
 export struct HitData {
   scalar t;
-  vec normal;
   const Triangle *obj;
-  int hits = 0;
+  int hits = 0; // for special visualizations
 };
 
 export class Object {
@@ -85,8 +85,11 @@ public:
   Object(Material *mat = new Material()) : mat{mat} {}
 
   // all objects must have a bounding box (for BVH) and be intersectable
-  virtual AABB bbox() const = 0;
   virtual HitData intersect(vec origin, vec direction) const = 0;
+  virtual AABB bbox() const = 0;
+  virtual double area() const = 0;
+  virtual std::tuple<vec, vec> sample() const = 0; // sample random point on surface of object, for NEE.
+                      // returns: {point, normal}.
 
   vec centroid() const { return .5 * bbox().min + .5 * bbox().max; }
 };
@@ -118,7 +121,7 @@ public:
   std::vector<Object *> objects;
 
   BVH() = default;
-  BVH(auto objs) : objects{std::move(objs)} {
+  BVH(auto objs) : objects{objs} {
     assert(!objects.empty());
 
     // create first node that spans entire object list
@@ -236,6 +239,16 @@ public:
   }
 
   vec normal() const { return (v1 - v0).cross(v2 - v0); }
+  double area() const override {
+    // Shoelace formula
+    // clang-format off
+    return 1/2 * std::abs(
+      v0.x * (v1.y - v2.y) +
+      v1.x * (v2.y - v0.y) +
+      v2.x * (v0.y - v1.y)
+    );
+    // clang-format on
+  }
 
   HitData intersect(vec origin, vec direction) const override {
     // Implements Möller-Trumbore.
@@ -255,13 +268,21 @@ public:
     scalar v = q.dot(direction);
     if (v < 0 || u + v > 1)
       return {INF};
-    // return {q.dot(e2), smooth ? (1-u-v)*vn0 + u*vn1 + v*vn2 : normal(),
-    // this}; return {q.dot(e2), normal(), this};
-    return {q.dot(e2), smooth ? (1 - u - v) * v0 + u * v1 + v * v2 : normal(),
-            this};
+    return {q.dot(e2), this};
   }
 
   AABB bbox() const override { return box; }
+  std::tuple<vec, vec> sample() const override {
+    vec u = v1 - v0;
+    vec v = v2 - v0;
+
+    double s = randreal(0, 1);
+    double t = randreal(0, 1);
+    if (s + t <= 1) { // in triangle?
+      return {s * u + t * v, normal()};
+    }
+    return {(1 - s) * u + (1 - t) * v, normal()};
+  }
 
 private:
   vec v0, v1, v2;
@@ -275,7 +296,8 @@ public:
   std::vector<vec> vertices, vnormals;
   std::vector<std::vector<std::array<unsigned int, 2>>> faces;
   bool smooth = false;
-  std::vector<Object *> triangles;
+  double area_;
+  std::vector<Triangle *> triangles;
 
   // This function should be called each time `faces` vector is modified.
   void init() {
@@ -306,17 +328,38 @@ public:
     }
     faces = newfaces;
 
+    for (const auto *t : triangles) {
+      area_ += t->area();
+    }
+
+    std::vector<Object *> objs;
+    objs.reserve(triangles.size());
+    for (Triangle *ptr : triangles) {
+      objs.push_back(static_cast<Object *>(ptr));
+    }
+
     // Reconstruct BVH.
-    bvh = BVH(triangles);
+    bvh = BVH(objs);
   }
 
   Polygon() = default;
 
   AABB bbox() const override { return bvh.bbox(); }
-  // scalar area() const { // TODO is this just an estimate?
-  // }
   HitData intersect(vec origin, vec direction) const override {
     return bvh.intersect(origin, direction);
+  }
+  double area() const override { return area_; }
+
+  std::tuple<vec, vec> sample() const override {
+    double r = randreal(0, area());
+    double accum = 0;
+    for (auto *t : triangles) {
+      accum += t->area();
+      if (r <= accum) {
+        return t->sample();
+      }
+    }
+    std::unreachable();
   }
 
 private:

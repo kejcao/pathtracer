@@ -19,14 +19,15 @@ public:
     return objects.intersect(origin, direction);
   }
 
-  // Object *light_source() const {
-  //   // TOOD make this random
-  //   for (const auto &o : objects) {
-  //     if (o.mat->emission != vec(0, 0, 0)) {
-  //       return o;
-  //     }
-  //   }
-  // }
+  std::vector<Object *> lights() const {
+    std::vector<Object *> res;
+    for (const auto &o : objects.objects) {
+      if (o->mat->emission != vec(0, 0, 0)) {
+        res.push_back(o);
+      }
+    }
+    return res;
+  }
 
 private:
 };

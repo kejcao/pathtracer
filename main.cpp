@@ -15,9 +15,10 @@ import scene;
 import object;
 import math;
 
-const auto s = Scene(parseobj("examples/redcube.obj"));
+const auto s = Scene(parseobj("/home/kjc/untitled.obj"));
+// const auto s = Scene(parseobj("examples/cornell-box.obj"));
 // const auto s = Scene(parseobj("examples/tea.obj"));
-//
+
 // const auto s = Scene(parseobj("examples/cornell-box.obj"));
 auto cam = Camera(vec(0, 0, 0));
 
@@ -69,7 +70,7 @@ public:
 
     renderThread = new RenderThread();
     connect(renderThread, &RenderThread::updateSignal, this,
-            &MainWindow::updateImage);
+            &MainWindow::updateImage_);
 
     auto movementTimer = new QTimer(this);
     connect(movementTimer, &QTimer::timeout, this, &MainWindow::updateMovement);
@@ -79,26 +80,32 @@ public:
   ~MainWindow() { delete renderThread; }
 
 protected:
+  void resizeEvent(QResizeEvent *event) override {
+    QMainWindow::resizeEvent(event);
+    updateImage();
+  }
+
   void keyPressEvent(QKeyEvent *event) override {
+    constexpr double speed = .1;
     if (!event->isAutoRepeat()) {
       switch (event->key()) {
       case Qt::Key_W:
-        movement.z = .2;
+        movement.z = speed;
         break;
       case Qt::Key_S:
-        movement.z = -.2;
+        movement.z = -speed;
         break;
       case Qt::Key_A:
-        movement.x = -.2;
+        movement.x = -speed;
         break;
       case Qt::Key_D:
-        movement.x = .2;
+        movement.x = speed;
         break;
       case Qt::Key_Q:
-        movement.y = -.2;
+        movement.y = -speed;
         break;
       case Qt::Key_E:
-        movement.y = .2;
+        movement.y = speed;
         break;
       case Qt::Key_R:
         startRender();
@@ -149,8 +156,6 @@ protected:
 
       cam.direction.y += yaw * M_PI / 180;
       cam.direction.x += pitch * M_PI / 180;
-
-      // startRender();
     }
   }
 
@@ -163,11 +168,18 @@ private slots:
     }
   }
 
-  void updateImage(const QImage &image) {
-    imageLabel->setPixmap(QPixmap::fromImage(image));
+  void updateImage_(const QImage &image) {
+    pixmap = QPixmap::fromImage(image);
+    updateImage();
+  }
+
+  void updateImage() {
+    imageLabel->setPixmap(pixmap.scaled(
+        imageLabel->width(), imageLabel->height(), Qt::KeepAspectRatio));
   }
 
 private:
+  QPixmap pixmap;
   QLabel *imageLabel;
   RenderThread *renderThread;
   QPoint lastMousePos;

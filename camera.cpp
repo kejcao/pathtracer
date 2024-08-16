@@ -6,6 +6,9 @@ module;
 #include <math.h>
 #include <random>
 #include <thread>
+#include <iostream>
+#include <print>
+#include <cassert>
 
 // Loop from start (inclusive) to end (exclusive).
 void parallel_for(int start, int end, std::function<void(int)> f,
@@ -59,8 +62,13 @@ public:
 
   vec pathtrace(const Scene &scene, vec origin, vec direction, int depth = 0) {
     HitData hit = scene.castray(origin, direction);
-    if (hit.t == INF)
-      return bgcolor; // nothing hit?
+    if (hit.t == INF) return bgcolor; // nothing hit?
+
+    vec intersection = origin + direction * hit.t;
+    vec normal = (hit.obj)->normal().normalize();
+
+    // ensure normal is pointing outward of the mesh
+    if (normal.dot(direction.normalize()) > 0) normal = -normal;
 
     // return random direction on the hemisphere aligned with the normal
     // (assume normal is normalized?)
@@ -75,39 +83,40 @@ public:
             .normalize();
       };
 
-      vec v;
-      do {
-        v = random_unit_sphere_direction();
-      } while (v.dot(normal) < 0);
-      return v;
+      vec v = random_unit_sphere_direction();
+      return v.dot(normal) < 0 ? -v : v;
     };
 
     vec color = vec(0, 0, 0);
 
-    // russian roulette!!!
-    constexpr double probability_of_continuing = .7;
-    if (depth <= 2 || randreal(0, 1) < probability_of_continuing) {
-      auto mat = hit.obj->mat;
-      vec brdf = mat->diffuse / M_PI;
-      vec v = random_direction((hit.obj)->normal());
+    // direct light sampling aka NEE
+    for (const Object *light : scene.lights()) {
+      auto [point, light_normal] = light->sample();
+      vec to_light = (point - intersection).normalize();
 
-      // if (randreal(0, 1) < .5) {
-      //   auto *o = scene.light_source();
-      //   v = o;
-      // }
+      // visibility ray
+      HitData h = scene.castray(intersection, to_light);
+      if (h.t == INF) continue;
 
-      // if not in hemisphere around normal, flip it.
-      // TODO normal should be to the outside of mesh.
-      // if (hit.normal.dot(v) > 0)
-      //   v = -v;
+      double cos_theta = to_light.dot(normal);
+      if (cos_theta < 0) cos_theta = 0;
 
-      vec intersection = origin + direction * hit.t;
-      // corresponds to rendering equation.
-      color += mat->emission + 2 * M_PI * brdf;
-      color += ( // the irradiance
-                   std::abs(direction.normalize().dot(v)) *
-                   pathtrace(scene, intersection, v, depth + 1)) /
-               probability_of_continuing;
+      double y = to_light.dot(light_normal);
+      if (y < 0) y = 0;
+      y /= std::pow(to_light.norm(), 2);
+
+      color += light->mat->emission * cos_theta * y;
+    }
+
+    constexpr double rr_prob = .7; // russian roulette probability; aka probability of continuing.
+    if (depth <= 2 || randreal(0, 1) < rr_prob) {
+      vec brdf = hit.obj->mat->diffuse / M_PI;
+      vec v = random_direction(normal);
+
+      constexpr double pdf = 1 / (2*M_PI) * rr_prob;
+
+      color += hit.obj->mat->emission; // add the emitted radiance
+      color += pathtrace(scene, intersection, v, depth+1) * brdf * std::abs(normal.dot(v)) / pdf; // the rendering equation
     }
     return color;
   }
