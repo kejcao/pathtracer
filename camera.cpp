@@ -2,13 +2,13 @@ module;
 
 #include "progress.h"
 
+#include <cassert>
 #include <functional>
+#include <iostream>
 #include <math.h>
+#include <print>
 #include <random>
 #include <thread>
-#include <iostream>
-#include <print>
-#include <cassert>
 
 // Loop from start (inclusive) to end (exclusive).
 void parallel_for(int start, int end, std::function<void(int)> f,
@@ -62,13 +62,15 @@ public:
 
   vec pathtrace(const Scene &scene, vec origin, vec direction, int depth = 0) {
     HitData hit = scene.castray(origin, direction);
-    if (hit.t == INF) return bgcolor; // nothing hit?
+    if (hit.t == INF)
+      return bgcolor; // nothing hit?
 
     vec intersection = origin + direction * hit.t;
     vec normal = (hit.obj)->normal().normalize();
 
     // ensure normal is pointing outward of the mesh
-    if (normal.dot(direction.normalize()) > 0) normal = -normal;
+    if (normal.dot(direction.normalize()) > 0) // wtf?
+      normal = -normal;
 
     // return random direction on the hemisphere aligned with the normal
     // (assume normal is normalized?)
@@ -94,29 +96,34 @@ public:
       auto [point, light_normal] = light->sample();
       vec to_light = (point - intersection).normalize();
 
-      // visibility ray
-      HitData h = scene.castray(intersection, to_light);
-      if (h.t == INF) continue;
+      // visibility ray; if we can't see the light source, skip.
+      if (scene.castray(intersection, to_light).t == INF)
+        continue;
 
-      double cos_theta = to_light.dot(normal);
-      if (cos_theta < 0) cos_theta = 0;
+      scalar cos_theta = to_light.dot(normal);
+      if (cos_theta < 0)
+        cos_theta = 0;
 
-      double y = to_light.dot(light_normal);
-      if (y < 0) y = 0;
+      scalar y = to_light.dot(light_normal);
+      if (y < 0)
+        y = 0;
       y /= std::pow(to_light.norm(), 2);
 
       color += light->mat->emission * cos_theta * y;
     }
 
-    constexpr double rr_prob = .7; // russian roulette probability; aka probability of continuing.
+    // rr_prob is russian roulette probability; aka probability of continuing.
+    constexpr double rr_prob = .7;
     if (depth <= 2 || randreal(0, 1) < rr_prob) {
-      vec brdf = hit.obj->mat->diffuse / M_PI;
-      vec v = random_direction(normal);
+      vec brdf = hit.obj->mat->diffuse / M_PI; // lol
+      vec randdir = random_direction(normal);
 
-      constexpr double pdf = 1 / (2*M_PI) * rr_prob;
+      // 1/2*pi in the PDF to account for hemisphere
+      constexpr double pdf = 1 / (2 * M_PI) * rr_prob;
 
       color += hit.obj->mat->emission; // add the emitted radiance
-      color += pathtrace(scene, intersection, v, depth+1) * brdf * std::abs(normal.dot(v)) / pdf; // the rendering equation
+      color += pathtrace(scene, intersection, randdir, depth + 1) * brdf *
+               std::abs(normal.dot(randdir)) / pdf; // the rendering equation
     }
     return color;
   }
@@ -132,9 +139,9 @@ public:
   }
 
   void render(const Scene &scene, int samples = 32,
-              std::function<void(int)> cb = nullptr) {
+              std::function<void()> cb = nullptr) {
 
-    Progress p = Progress(OUTH);
+    // Progress p = Progress(OUTH);
 
     // clear previous pixels buffer
     for (int py = 0; py < OUTH; ++py)
@@ -142,27 +149,21 @@ public:
         pixels[py][px] = vec(0, 0, 0);
 
     // start pathtracing!!! divvy up each row of pixels to different threads.
-    parallel_for(
-        0, OUTH,
-        [&](int py) {
-          for (int px = 0; px < OUTW; ++px) {
-            vec dir = point_towards(px, py);
-            for (int i = 0; i < samples; ++i) {
-              pixels[py][px] += pathtrace(scene, origin, dir);
+    for (int i = 0; i < samples; ++i) {
+      parallel_for(
+          0, OUTH,
+          [&](int py) {
+            for (int px = 0; px < OUTW; ++px) {
+              vec dir = point_towards(px, py);
+              pixels[py][px] += (i * pixels[py][px] + pathtrace(scene, origin, dir) * 255) / (i+1);
             }
-            pixels[py][px] *= 255;
-            pixels[py][px] /= samples;
-            pixels[py][px] = vec(std::clamp((int)pixels[py][px].x, 0, 255),
-                                 std::clamp((int)pixels[py][px].y, 0, 255),
-                                 std::clamp((int)pixels[py][px].z, 0, 255));
-          }
-          p.increment();
+            // p.increment();
+          },
+          threadcnt);
 
-          if (cb != nullptr) {
-            cb(py); // this causes memory errors?
-          }
-        },
-        threadcnt);
+      if (cb != nullptr) cb();
+    }
+    std::println("done");
   }
 
   // just output basic PPM file, for debugging maybe. main interface is through

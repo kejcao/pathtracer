@@ -3,6 +3,7 @@ module;
 #include <cassert>
 #include <ostream>
 #include <random>
+#include <utility>
 
 export module math;
 
@@ -16,8 +17,7 @@ export scalar randreal(scalar x, scalar y) {
   return std::uniform_real_distribution<>(x, y)(e2);
 }
 
-export class vec {
-public:
+export struct vec {
   scalar x = 0, y = 0, z = 0;
 
   vec() = default;
@@ -93,6 +93,7 @@ public:
       return z;
     }
     assert(false);
+    std::unreachable();
   };
 
   scalar dot(const vec &v) const { return x * v.x + y * v.y + z * v.z; }
@@ -154,10 +155,34 @@ public:
   vec reflect_around(const vec &normal) const;
 };
 
-export vec operator*(scalar n, const vec &v) { return vec(v.x * n, v.y * n, v.z * n); }
-export vec operator*(const vec &v, scalar n) { return vec(v.x * n, v.y * n, v.z * n); }
-export vec operator/(scalar n, const vec &v) { return vec(v.x / n, v.y / n, v.z / n); }
-export vec operator/(const vec &v, scalar n) { return vec(v.x / n, v.y / n, v.z / n); }
+// template <size_t N> auto get(const vec &obj) {
+//   if constexpr (N == 0)
+//     return obj.x;
+//   else if constexpr (N == 1)
+//     return obj.y;
+//   else if constexpr (N == 2)
+//     return obj.z;
+// }
+//
+// namespace std {
+// template <> struct tuple_size<vec> : std::integral_constant<size_t, 3> {};
+// template <size_t N> struct tuple_element<N, vec> {
+//   using type = decltype(std::declval<vec>().get<N>());
+// };
+// } // namespace std
+
+export vec operator*(scalar n, const vec &v) {
+  return vec(v.x * n, v.y * n, v.z * n);
+}
+export vec operator*(const vec &v, scalar n) {
+  return vec(v.x * n, v.y * n, v.z * n);
+}
+export vec operator/(scalar n, const vec &v) {
+  return vec(v.x / n, v.y / n, v.z / n);
+}
+export vec operator/(const vec &v, scalar n) {
+  return vec(v.x / n, v.y / n, v.z / n);
+}
 
 vec vec::reflect_around(const vec &normal) const {
   return 2 * this->dot(normal) * normal - *this;

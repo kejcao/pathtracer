@@ -8,7 +8,7 @@ To use,
 
 ```bash
 $ mkdir build && cd build
-$ CXX=clang++ cmake -GNinja ..
+$ CXX=clang++ cmake -DCMAKE_BUILD_TYPE=Release -GNinja ..
 $ ninja
 $ cd .. && build/raytracer
 ```
