@@ -92,6 +92,7 @@ public:
     vec color = vec(0, 0, 0);
 
     // direct light sampling aka NEE
+    // based on https://www.youtube.com/watch?v=FU1dbi827LY
     for (const Object *light : scene.lights()) {
       auto [point, light_normal] = light->sample();
       vec to_light = (point - intersection).normalize();
@@ -109,7 +110,7 @@ public:
         y = 0;
       y /= std::pow(to_light.norm(), 2);
 
-      color += light->mat->emission * cos_theta * y;
+      color += light->mat->emission * cos_theta * y * (1/(light->area()*2));
     }
 
     // rr_prob is russian roulette probability; aka probability of continuing.
@@ -155,7 +156,7 @@ public:
           [&](int py) {
             for (int px = 0; px < OUTW; ++px) {
               vec dir = point_towards(px, py);
-              pixels[py][px] += (i * pixels[py][px] + pathtrace(scene, origin, dir) * 255) / (i+1);
+              pixels[py][px] = (i * pixels[py][px] + pathtrace(scene, origin, dir) * 255) / (i+1);
             }
             // p.increment();
           },

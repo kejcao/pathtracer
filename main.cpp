@@ -17,8 +17,10 @@ import math;
 
 // const auto s = Scene(parseobj("/home/kjc/untitled.obj"));
 const auto s = Scene(parseobj("/home/kjc/pathtrace/bunny.obj"));
+// const auto s = Scene(parseobj("/home/kjc/pathtrace/cube.obj"));
 // const auto s = Scene(parseobj("examples/cornell-box.obj"));
 // const auto s = Scene(parseobj("examples/tea.obj"));
+// const auto s = Scene(parseobj("examples/redcube.obj"));
 
 // const auto s = Scene(parseobj("examples/cornell-box.obj"));
 auto cam = Camera(vec(0, 0, 0));
@@ -35,7 +37,7 @@ signals:
 protected:
   void run() override {
     QImage image(256, 256, QImage::Format_RGB32);
-    cam.render(s, 8, [&, this]() {
+    cam.render(s, 16, [&, this]() {
       auto norm = [](double i) { return std::clamp((int)i, 0, 255); };
       for (int y = 0; y < cam.OUTH; ++y) {
         for (int x = 0; x < cam.OUTW; ++x) {

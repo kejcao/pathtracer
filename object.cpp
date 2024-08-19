@@ -259,11 +259,11 @@ public:
   double area() const override {
     // Shoelace formula
     // clang-format off
-    return 1/2 * std::abs(
+    return std::abs(
       v0().x * (v1().y - v2().y) +
       v1().x * (v2().y - v0().y) +
       v2().x * (v0().y - v1().y)
-    );
+    ) / 2;
     // clang-format on
   }
 
