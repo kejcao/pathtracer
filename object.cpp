@@ -9,8 +9,10 @@ module;
 #include <memory>
 #include <print>
 #include <ranges>
+#include <regex>
 #include <span>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 export module object;
@@ -88,7 +90,8 @@ public:
   virtual HitData intersect(vec origin, vec direction) const = 0;
   virtual AABB bbox() const = 0;
   virtual double area() const = 0;
-  virtual std::tuple<vec, vec> sample() const = 0; // sample random point on surface of object, for NEE.
+  virtual std::tuple<vec, vec>
+  sample() const = 0; // sample random point on surface of object, for NEE.
                       // returns: {point, normal}.
 
   vec centroid() const { return .5 * bbox().min + .5 * bbox().max; }
@@ -225,40 +228,53 @@ private:
   }
 };
 
+struct Index {
+  uint32_t i0;
+  uint32_t i1;
+  uint32_t i2;
+};
+
+class Polygon;
 class Triangle : public Object {
 public:
-  Triangle(vec v0, vec v1, vec v2, vec vn0, vec vn1, vec vn2, bool smooth,
+  Triangle(Polygon *parent, Index v, Index vt, Index vn, bool smooth,
            Material *mat)
-      : Object(mat), v0{v0}, v1{v1}, v2{v2}, vn0{vn0}, vn1{vn1}, vn2{vn2},
-        smooth{smooth} {
+      : Object(mat), parent{parent}, v{v}, vn{vn}, smooth{smooth} {
 
-    box = AABB(vec(std::min({v0.x, v1.x, v2.x}), std::min({v0.y, v1.y, v2.y}),
-                   std::min({v0.z, v1.z, v2.z})),
-               vec(std::max({v0.x, v1.x, v2.x}), std::max({v0.y, v1.y, v2.y}),
-                   std::max({v0.z, v1.z, v2.z})));
+    box = AABB(vec(std::min({v0().x, v1().x, v2().x}),
+                   std::min({v0().y, v1().y, v2().y}),
+                   std::min({v0().z, v1().z, v2().z})),
+               vec(std::max({v0().x, v1().x, v2().x}),
+                   std::max({v0().y, v1().y, v2().y}),
+                   std::max({v0().z, v1().z, v2().z})));
   }
 
-  vec normal() const { return (v1 - v0).cross(v2 - v0); }
+  vec v0() const;
+  vec v1() const;
+  vec v2() const;
+
+  vec normal() const { return (v1() - v0()).cross(v2() - v0()); }
+
   double area() const override {
     // Shoelace formula
     // clang-format off
     return 1/2 * std::abs(
-      v0.x * (v1.y - v2.y) +
-      v1.x * (v2.y - v0.y) +
-      v2.x * (v0.y - v1.y)
+      v0().x * (v1().y - v2().y) +
+      v1().x * (v2().y - v0().y) +
+      v2().x * (v0().y - v1().y)
     );
     // clang-format on
   }
 
   HitData intersect(vec origin, vec direction) const override {
     // Implements Möller-Trumbore.
-    vec e1 = v1 - v0;
-    vec e2 = v2 - v0;
+    vec e1 = v1() - v0();
+    vec e2 = v2() - v0();
     vec p = direction.cross(e2);
     scalar n = p.dot(e1);
     if (n == 0)
       return {INF};
-    vec t = origin - v0;
+    vec t = origin - v0();
 
     scalar u = 1 / n * p.dot(t);
     if (u < 0 || u > 1)
@@ -273,8 +289,8 @@ public:
 
   AABB bbox() const override { return box; }
   std::tuple<vec, vec> sample() const override {
-    vec u = v1 - v0;
-    vec v = v2 - v0;
+    vec u = v1() - v0();
+    vec v = v2() - v0();
 
     double s = randreal(0, 1);
     double t = randreal(0, 1);
@@ -285,34 +301,67 @@ public:
   }
 
 private:
-  vec v0, v1, v2;
-  vec vn0, vn1, vn2;
+  Index v, vn;
   bool smooth;
   AABB box;
+  Polygon *parent;
 };
 
 class Polygon : public Object {
 public:
-  std::vector<vec> vertices, vnormals;
-  std::vector<std::vector<std::array<unsigned int, 2>>> faces;
+  std::vector<vec> vertices, vnormals, vtextures;
+  std::vector<std::vector<std::array<unsigned int, 3>>> faces;
   bool smooth = false;
   double area_;
   std::vector<Triangle *> triangles;
 
+  void sanity_check() {
+    // int mv = 0, mn = 0, mt = 0;
+    // bool failed = false;
+    // for (auto &face : faces) {
+    //   for (auto &[a, b, c] : face) {
+    //     if (a > mv)
+    //       mv = a;
+    //     if (b > mt)
+    //       mt = b;
+    //     if (c > mn)
+    //       mn = c;
+    //
+    //     if (a > vertices.size() || b > vnormals.size() ||
+    //         c > vtextures.size()) {
+    //
+    //       // std::println("error: polygon failed sanity check.");
+    //       failed = true;
+    //     }
+    //   }
+    // }
+    std::println(" vertices.size():  {}", vertices.size());
+    std::println(" vnormals.size():  {}", vnormals.size());
+    std::println(" vtextures.size():  {}", vtextures.size());
+    std::println(" faces.size():  {}", faces.size());
+    // std::println("mv = {}; mn = {}; mt = {}", mv, mn, mt);
+    // if (failed) {
+    //   abort();
+    // }
+  }
+
   // This function should be called each time `faces` vector is modified.
   void init() {
+    sanity_check();
     // Triangularize polygon.
     // TODO only works for convex polygons.
-    auto addtriangle = [&](std::array<unsigned int, 2> v1,
-                           std::array<unsigned int, 2> v2,
-                           std::array<unsigned int, 2> v3) {
-      triangles.push_back(new Triangle(
-          vertices[v1[0]], vertices[v2[0]], vertices[v3[0]],
-          v1[1] < vnormals.size() ? vnormals[v1[1]] : vertices[v1[0]],
-          v2[1] < vnormals.size() ? vnormals[v2[1]] : vertices[v2[0]],
-          v3[1] < vnormals.size() ? vnormals[v3[1]] : vertices[v3[0]], smooth,
-          mat));
+    auto addtriangle = [&](std::array<unsigned int, 3> v1,
+                           std::array<unsigned int, 3> v2,
+                           std::array<unsigned int, 3> v3) {
+      // clang-format off
+      // in obj wavefront indexing begins at one, so we need to subtract by one.
+      triangles.push_back(new Triangle(this,
+          {v1[0], v2[0], v3[0]},
+          {v1[1], v2[1], v3[1]},
+          {v1[2], v2[2], v3[2]}, smooth, mat));
+      // clang-format on
     };
+
     decltype(faces) newfaces;
     for (const auto &face : faces) {
       if (face.size() > 3) {
@@ -337,8 +386,6 @@ public:
     for (Triangle *ptr : triangles) {
       objs.push_back(static_cast<Object *>(ptr));
     }
-
-    // Reconstruct BVH.
     bvh = BVH(objs);
   }
 
@@ -366,135 +413,256 @@ private:
   BVH bvh;
 };
 
-export std::vector<Object *> parseobj(const std::string &filename) {
-  std::println("started parsing {}", filename);
-  auto split = [](const std::string &s, const std::string &delim = " ") {
-    std::vector<std::string> toks = {};
-    size_t i = 0, pi = 0;
-    while ((i = s.find(delim, pi)) != std::string::npos) {
-      // skip empty strings
-      // if (i-pi != 0) {
-      toks.push_back(s.substr(pi, i - pi));
-      // }
-      pi = i + delim.size();
-    }
-    toks.push_back(s.substr(pi));
-    return toks;
-  };
+vec Triangle::v0() const {
+  assert(v.i0 < parent->vertices.size());
+  return parent->vertices[v.i0];
+}
+vec Triangle::v1() const {
+  assert(v.i1 < parent->vertices.size());
+  return parent->vertices[v.i1];
+}
+vec Triangle::v2() const {
+  assert(v.i2 < parent->vertices.size());
+  return parent->vertices[v.i2];
+}
 
-  auto parsemtl = [&split](const std::string &filename, auto &materials) {
-    int lineno = 0;
-    try {
-      std::ifstream ifs(filename);
-      if (!ifs)
-        assert(false);
+auto split = [](const std::string &s, const std::string &delim = " ") {
+  std::vector<std::string> toks = {};
+  size_t i = 0, pi = 0;
+  while ((i = s.find(delim, pi)) != std::string::npos) {
+    // skip empty strings
+    // if (i-pi != 0) {
+    toks.push_back(s.substr(pi, i - pi));
+    // }
+    pi = i + delim.size();
+  }
+  toks.push_back(s.substr(pi));
+  return toks;
+};
 
-      Material *m;
-      std::string line;
-      while (std::getline(ifs, line)) {
-        ++lineno;
-        std::vector<std::string> toks = split(line);
-
-        if (toks[0] == "newmtl") {
-          assert(toks.size() == 2);
-          m = new Material();
-          materials[toks[1]] = m;
-        } else if (toks[0] == "Kd") {
-          assert(toks.size() == 4);
-          m->diffuse =
-              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-        } else if (toks[0] == "Ke") {
-          assert(toks.size() == 4);
-          m->emission =
-              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-        } else if (toks[0] == "Ks") {
-          assert(toks.size() == 4);
-          m->specular =
-              vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-        } else if (toks[0] == "Ns") {
-          assert(toks.size() == 2);
-          m->shininess = std::stof(toks[1]);
-        } else if (toks[0] == "Ni") {
-          assert(toks.size() == 2);
-          m->index_of_refraction = std::stof(toks[1]);
-        }
-      }
-    } catch (std::invalid_argument &e) {
-      throw std::runtime_error(filename + ": " + std::to_string(lineno) +
-                               ": parse error");
-    }
-  };
-
+auto parsemtl = [](const std::string &filename, auto &materials) {
   int lineno = 0;
   try {
     std::ifstream ifs(filename);
     if (!ifs)
       assert(false);
 
-    std::map<std::string, Material *> materials;
-    std::vector<Object *> objects;
-    int offset = 0;
-    Polygon *p = nullptr;
+    Material *m;
     std::string line;
     while (std::getline(ifs, line)) {
       ++lineno;
       std::vector<std::string> toks = split(line);
 
-      if (toks[0] == "o") {
-        if (p != nullptr) {
-          p->init();
-          objects.push_back(p);
-          offset += p->vertices.size();
-        }
-        p = new Polygon();
-        continue;
-      } else if (toks[0] == "s") {
-        if (p == nullptr)
-          p = new Polygon();
+      if (toks[0] == "newmtl") {
         assert(toks.size() == 2);
-        if (toks[1] == "on") {
-          p->smooth = true;
-          continue;
-        } else if (toks[1] == "off") {
-          p->smooth = false;
-          continue;
-        }
-        p->smooth = std::stoi(toks[1]) == 1;
-      } else if (toks[0] == "v") {
-        if (p == nullptr)
-          p = new Polygon();
+        m = new Material();
+        materials[toks[1]] = m;
+      } else if (toks[0] == "Kd") {
         assert(toks.size() == 4);
-        p->vertices.push_back(
-            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3])));
-      } else if (toks[0] == "vn") {
-        if (p == nullptr)
-          p = new Polygon();
+        m->diffuse =
+            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+      } else if (toks[0] == "Ke") {
         assert(toks.size() == 4);
-        p->vnormals.push_back(
-            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3])));
-      } else if (toks[0] == "f") {
-        if (p == nullptr)
-          p = new Polygon();
-        std::vector<std::array<unsigned int, 2>> vs;
-        for (const auto &vertex : toks | std::views::drop(1)) {
-          std::vector<std::string> toks = split(vertex, "/");
-          assert(toks.size() >= 2 && toks.size() <= 4);
-          vs.push_back({(unsigned int)std::stoi(toks[0]) - 1 - offset,
-                        toks.size() >= 3
-                            ? (unsigned int)std::stoi(toks[2]) - 1 - offset
-                            : 0});
-        }
-        p->faces.push_back({vs});
-      } else if (toks[0] == "mtllib") {
+        m->emission =
+            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+      } else if (toks[0] == "Ks") {
+        assert(toks.size() == 4);
+        m->specular =
+            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
+      } else if (toks[0] == "Ns") {
         assert(toks.size() == 2);
-        parsemtl(fs::path(filename).parent_path() / toks[1], materials);
-      } else if (toks[0] == "usemtl") {
-        if (p == nullptr)
-          p = new Polygon();
+        m->shininess = std::stof(toks[1]);
+      } else if (toks[0] == "Ni") {
         assert(toks.size() == 2);
-        p->mat = materials[toks[1]];
+        m->index_of_refraction = std::stof(toks[1]);
       }
     }
+  } catch (std::invalid_argument &e) {
+    throw std::runtime_error(filename + ": " + std::to_string(lineno) +
+                             ": parse error");
+  }
+};
+
+// namespace std {
+// unsigned int stou(const std::string &s) { return (unsigned int)std::stoi(s);
+// }
+// }; // namespace std
+
+// doesn't support obj wavefront files that "backreference" vertices.
+export std::vector<Object *>
+parseobj(const std::string &filename) { // this is shit code
+  int offset = 0;                       // offset, for vertex count. TODO
+  Polygon *p = nullptr;                 // current polygon object
+  std::map<std::string, Material *> materials;
+  std::vector<Object *> objects; // past polygon objects
+
+  auto FACE = // talk about overcomplication... the cpp muse guided me towards
+              // this code.
+      [&offset](
+          const std::string &re,
+          std::function<std::array<unsigned int, 3>(std::vector<unsigned int>)>
+              f)
+      -> std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>> {
+    return {std::regex(std::format("^\\s*f({})+\\s*$", re)),
+            [&, re](Polygon *p, std::smatch matches) {
+              auto search = [&offset](std::string text, std::regex pattern) {
+                std::sregex_iterator it(text.begin(), text.end(), pattern);
+                std::sregex_iterator end;
+                std::vector<std::vector<unsigned int>> parts;
+                while (it != end) {
+                  parts.push_back({});
+                  for (int i = 1; i < (*it).size(); ++i) {
+                    parts.back().push_back(
+                        (unsigned int)std::stoi((*it)[i].str()) - 1 - offset);
+                  }
+                  ++it;
+                }
+                return parts;
+              };
+
+              auto v = search(matches[0].str(), std::regex(re));
+              std::vector<std::array<unsigned int, 3>> face;
+              for (const auto &l : v) {
+                face.push_back(f(l));
+              }
+              p->faces.push_back(face);
+            }};
+  };
+
+  // TODO implement s for smoothing
+  const std::vector<
+      std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>>>
+      v{{std::regex("^\\s*v\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+         [](Polygon *p, std::smatch matches) {
+           p->vertices.push_back({
+               std::stof(matches[1].str()),
+               std::stof(matches[2].str()),
+               std::stof(matches[3].str()),
+           });
+         }},
+        {std::regex(
+             "^\\s*vn\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+         [](Polygon *p, std::smatch matches) {
+           p->vnormals.push_back({
+               std::stof(matches[1].str()),
+               std::stof(matches[2].str()),
+               std::stof(matches[3].str()),
+           });
+         }},
+        {std::regex( // fix this vt v [u,w]
+             "^\\s*vt\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+         [](Polygon *p, std::smatch matches) {
+           p->vtextures.push_back({
+               std::stof(matches[1].str()),
+               std::stof(matches[2].str()),
+               std::stof(matches[3].str()),
+           });
+         }},
+        {std::regex("^\\s*f(\\s+[0-9]+)+\\s*$"),
+         [](Polygon *p, std::smatch matches) {
+
+         }},
+        FACE("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)",
+             [](auto l) -> std::array<unsigned int, 3> {
+               return {l[0], l[1], l[2]};
+             }),
+        FACE("\\s+([0-9]+)\\/\\/([0-9]+)",
+             [](auto l) -> std::array<unsigned int, 3> {
+               return {l[0], 0, l[1]};
+             }),
+
+        // {std::regex(std::format("^\\s*f({})+\\s*$", re)),
+        //  [&](Polygon *p, std::smatch matches) {
+        //    auto v = search(matches[0].str(), std::regex(re));
+        //    std::vector<std::array<unsigned int, 3>> face;
+        //    for (auto &l : v) {
+        //      face.push_back({stou(l[0]), stou(l[1]), stou(l[2])});
+        //    }
+        //    p->faces.push_back(face);
+        //  }},
+
+        // {std::regex("^\\s*f(\\s+[0-9]+\\/[0-9]+\\/[0-9]+)+\\s*$"),
+        //  [&](Polygon *p, std::smatch matches) {
+        //    auto v = search(matches[0].str(),
+        //                    std::regex("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)"));
+        //
+        //    std::vector<std::array<unsigned int, 3>> face;
+        //    for (auto &l : v) {
+        //      face.push_back({stou(l[0]), stou(l[1]), stou(l[2])});
+        //    }
+        //    p->faces.push_back(face);
+        //  }},
+
+        // {std::regex("^\\s*f((\\s+[0-9]+)+|(\\s+([0-9]+)\\/([0-9]+))+|(\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+))+|(\\s+([0-9]+)\\/\\/([0-9]+))+)\\s*$"),
+        //  [offset](Polygon *p, std::smatch matches) {
+        // std::regex
+        //    auto stou = [offset](const std::string &s) {
+        //      assert(std::stoi(s) - 1 - offset >= 0);
+        //      return (unsigned int)std::stoi(s) - 1 - offset;
+        //    };
+        //
+        //    if (matches[1].matched) { // f 1 2 3
+        //      p->faces.push_back({
+        //          {stou(matches[1].str()), 0, 0},
+        //          {stou(matches[2].str()), 0, 0},
+        //          {stou(matches[3].str()), 0, 0},
+        //      });
+        //    } else if (matches[4].matched) { // f 1/2 3/4 5/6
+        //      p->faces.push_back({
+        //          {stou(matches[5].str()), stou(matches[6].str()), 0},
+        //          {stou(matches[8].str()), stou(matches[9].str()), 0},
+        //          {stou(matches[11].str()), stou(matches[12].str()), 0},
+        //      });
+        //    } else if (matches[13].matched) { // f 1/2/3 4/5/6 7/8/9
+        //      p->faces.push_back({
+        //          {stou(matches[14].str()), stou(matches[15].str()),
+        //           stou(matches[16].str())},
+        //          {stou(matches[18].str()), stou(matches[19].str()),
+        //           stou(matches[20].str())},
+        //          {stou(matches[22].str()), stou(matches[23].str()),
+        //           stou(matches[24].str())},
+        //      });
+        //    } else if (matches[25].matched) { // f 1//2 3//4 5//6
+        //      p->faces.push_back({
+        //          {stou(matches[26].str()), 0, stou(matches[27].str())},
+        //          {stou(matches[29].str()), 0, stou(matches[30].str())},
+        //          {stou(matches[32].str()), 0, stou(matches[33].str())},
+        //      });
+        //    }
+        //  }},
+        {std::regex("^o\\s(.*)$"),
+         [&](Polygon *_, std::smatch matches) {
+           if (p != nullptr) {
+             p->init();
+             objects.push_back(p);
+             offset += p->vertices.size();
+           }
+           p = new Polygon();
+           // matches[1].str(); // name
+         }},
+        {std::regex("^mtllib\\s(.*)$"),
+         [&](Polygon *_, std::smatch matches) {
+           parsemtl(fs::path(filename).parent_path() / matches[1].str(),
+                    materials);
+         }},
+        {std::regex("^usemtl\\s(.*)$"), [&](Polygon *_, std::smatch matches) {
+           p->mat = materials[matches[1].str()];
+         }}};
+
+  int lineno = 0;
+  try {
+    std::ifstream ifs(filename);
+    std::string line;
+    while (std::getline(ifs, line)) {
+      ++lineno;
+      for (const auto &[r, f] : v) {
+        std::smatch matches;
+        if (std::regex_match(line, matches, r)) {
+          f(p, matches);
+        }
+      }
+    }
+
     if (p != nullptr) {
       p->init();
       objects.push_back(p);
