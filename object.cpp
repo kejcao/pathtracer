@@ -1,5 +1,6 @@
 module;
 
+#include "progress.h"
 #include <algorithm>
 #include <cassert>
 #include <filesystem>
@@ -315,39 +316,8 @@ public:
   double area_;
   std::vector<Triangle *> triangles;
 
-  void sanity_check() {
-    // int mv = 0, mn = 0, mt = 0;
-    // bool failed = false;
-    // for (auto &face : faces) {
-    //   for (auto &[a, b, c] : face) {
-    //     if (a > mv)
-    //       mv = a;
-    //     if (b > mt)
-    //       mt = b;
-    //     if (c > mn)
-    //       mn = c;
-    //
-    //     if (a > vertices.size() || b > vnormals.size() ||
-    //         c > vtextures.size()) {
-    //
-    //       // std::println("error: polygon failed sanity check.");
-    //       failed = true;
-    //     }
-    //   }
-    // }
-    std::println(" vertices.size():  {}", vertices.size());
-    std::println(" vnormals.size():  {}", vnormals.size());
-    std::println(" vtextures.size():  {}", vtextures.size());
-    std::println(" faces.size():  {}", faces.size());
-    // std::println("mv = {}; mn = {}; mt = {}", mv, mn, mt);
-    // if (failed) {
-    //   abort();
-    // }
-  }
-
   // This function should be called each time `faces` vector is modified.
   void init() {
-    sanity_check();
     // Triangularize polygon.
     // TODO only works for convex polygons.
     auto addtriangle = [&](std::array<unsigned int, 3> v1,
@@ -491,8 +461,10 @@ auto parsemtl = [](const std::string &filename, auto &materials) {
 // doesn't support obj wavefront files that "backreference" vertices.
 export std::vector<Object *>
 parseobj(const std::string &filename) { // this is shit code
-  int offset = 0;                       // offset, for vertex count. TODO
-  Polygon *p = nullptr;                 // current polygon object
+  Progress pbar;
+
+  int offset = 0;       // offset, for vertex count. TODO
+  Polygon *p = nullptr; // current polygon object
   std::map<std::string, Material *> materials;
   std::vector<Object *> objects; // past polygon objects
 
@@ -503,8 +475,9 @@ parseobj(const std::string &filename) { // this is shit code
           std::function<std::array<unsigned int, 3>(std::vector<unsigned int>)>
               f)
       -> std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>> {
+    std::regex re_ = std::regex(re); // precompile
     return {std::regex(std::format("^\\s*f({})+\\s*$", re)),
-            [&, re](Polygon *p, std::smatch matches) {
+            [&, re_, re](Polygon *p, std::smatch matches) {
               auto search = [&offset](std::string text, std::regex pattern) {
                 std::sregex_iterator it(text.begin(), text.end(), pattern);
                 std::sregex_iterator end;
@@ -520,7 +493,7 @@ parseobj(const std::string &filename) { // this is shit code
                 return parts;
               };
 
-              auto v = search(matches[0].str(), std::regex(re));
+              auto v = search(matches[0].str(), re_);
               std::vector<std::array<unsigned int, 3>> face;
               for (const auto &l : v) {
                 face.push_back(f(l));
@@ -549,7 +522,7 @@ parseobj(const std::string &filename) { // this is shit code
                std::stof(matches[3].str()),
            });
          }},
-        {std::regex( // fix this vt v [u,w]
+        {std::regex( // fix this vt v [u=0,w=0]
              "^\\s*vt\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
          [](Polygon *p, std::smatch matches) {
            p->vtextures.push_back({
@@ -557,10 +530,6 @@ parseobj(const std::string &filename) { // this is shit code
                std::stof(matches[2].str()),
                std::stof(matches[3].str()),
            });
-         }},
-        {std::regex("^\\s*f(\\s+[0-9]+)+\\s*$"),
-         [](Polygon *p, std::smatch matches) {
-
          }},
         FACE("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)",
              [](auto l) -> std::array<unsigned int, 3> {
@@ -570,66 +539,6 @@ parseobj(const std::string &filename) { // this is shit code
              [](auto l) -> std::array<unsigned int, 3> {
                return {l[0], 0, l[1]};
              }),
-
-        // {std::regex(std::format("^\\s*f({})+\\s*$", re)),
-        //  [&](Polygon *p, std::smatch matches) {
-        //    auto v = search(matches[0].str(), std::regex(re));
-        //    std::vector<std::array<unsigned int, 3>> face;
-        //    for (auto &l : v) {
-        //      face.push_back({stou(l[0]), stou(l[1]), stou(l[2])});
-        //    }
-        //    p->faces.push_back(face);
-        //  }},
-
-        // {std::regex("^\\s*f(\\s+[0-9]+\\/[0-9]+\\/[0-9]+)+\\s*$"),
-        //  [&](Polygon *p, std::smatch matches) {
-        //    auto v = search(matches[0].str(),
-        //                    std::regex("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)"));
-        //
-        //    std::vector<std::array<unsigned int, 3>> face;
-        //    for (auto &l : v) {
-        //      face.push_back({stou(l[0]), stou(l[1]), stou(l[2])});
-        //    }
-        //    p->faces.push_back(face);
-        //  }},
-
-        // {std::regex("^\\s*f((\\s+[0-9]+)+|(\\s+([0-9]+)\\/([0-9]+))+|(\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+))+|(\\s+([0-9]+)\\/\\/([0-9]+))+)\\s*$"),
-        //  [offset](Polygon *p, std::smatch matches) {
-        // std::regex
-        //    auto stou = [offset](const std::string &s) {
-        //      assert(std::stoi(s) - 1 - offset >= 0);
-        //      return (unsigned int)std::stoi(s) - 1 - offset;
-        //    };
-        //
-        //    if (matches[1].matched) { // f 1 2 3
-        //      p->faces.push_back({
-        //          {stou(matches[1].str()), 0, 0},
-        //          {stou(matches[2].str()), 0, 0},
-        //          {stou(matches[3].str()), 0, 0},
-        //      });
-        //    } else if (matches[4].matched) { // f 1/2 3/4 5/6
-        //      p->faces.push_back({
-        //          {stou(matches[5].str()), stou(matches[6].str()), 0},
-        //          {stou(matches[8].str()), stou(matches[9].str()), 0},
-        //          {stou(matches[11].str()), stou(matches[12].str()), 0},
-        //      });
-        //    } else if (matches[13].matched) { // f 1/2/3 4/5/6 7/8/9
-        //      p->faces.push_back({
-        //          {stou(matches[14].str()), stou(matches[15].str()),
-        //           stou(matches[16].str())},
-        //          {stou(matches[18].str()), stou(matches[19].str()),
-        //           stou(matches[20].str())},
-        //          {stou(matches[22].str()), stou(matches[23].str()),
-        //           stou(matches[24].str())},
-        //      });
-        //    } else if (matches[25].matched) { // f 1//2 3//4 5//6
-        //      p->faces.push_back({
-        //          {stou(matches[26].str()), 0, stou(matches[27].str())},
-        //          {stou(matches[29].str()), 0, stou(matches[30].str())},
-        //          {stou(matches[32].str()), 0, stou(matches[33].str())},
-        //      });
-        //    }
-        //  }},
         {std::regex("^o\\s(.*)$"),
          [&](Polygon *_, std::smatch matches) {
            if (p != nullptr) {
@@ -667,7 +576,7 @@ parseobj(const std::string &filename) { // this is shit code
       p->init();
       objects.push_back(p);
     }
-    std::println("done parsing {}", filename);
+    pbar.finish(std::format("parse {}", filename));
     return objects;
   } catch (std::invalid_argument &e) {
     throw std::runtime_error(filename + ": " + std::to_string(lineno) +
