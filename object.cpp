@@ -73,27 +73,56 @@ public:
     frame = av_frame_alloc();
     int response;
 
-    while (av_read_frame(formatContext, &packet) >= 0) {
-      if (packet.stream_index == videoStreamIndex) {
-        response = avcodec_send_packet(codecContext, &packet);
-        error(response < 0, "Failed to decode packet");
+    error(av_read_frame(formatContext, &packet) < 0, "Failed to read frame");
+    if (packet.stream_index == videoStreamIndex) {
+      response = avcodec_send_packet(codecContext, &packet);
+      error(response < 0, "Failed to decode packet");
 
-        response = avcodec_receive_frame(codecContext, frame);
-        if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
-          av_packet_unref(&packet);
-          continue;
-        } else if (response < 0) {
-          fprintf(stderr, "Failed to decode frame\n");
-          break;
-        }
-        break;
+      response = avcodec_receive_frame(codecContext, frame);
+      error(response < 0, "Failed to decode frame");
+      if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
+        av_packet_unref(&packet);
+        error(false, "Failed to receive frame");
       }
     }
   }
 
   int width() const { return frame->width; }
   int height() const { return frame->height; }
-  uint8_t *data() const { return frame->data[0]; }
+
+  // on https://ffmpeg.org/doxygen/2.7/pixfmt_8h.html:
+  // AV_PIX_FMT_RGB32 is handled in an endian-specific manner. An RGBA color is
+  // put together as: (A << 24) | (R << 16) | (G << 8) | B This is stored as
+  // BGRA on little-endian CPU architectures and ARGB on big-endian CPUs.
+  //
+  // When the pixel format is palettized RGB32 (AV_PIX_FMT_PAL8), the palettized
+  // image data is stored in AVFrame.data[0]. The palette is transported in
+  // AVFrame.data[1], is 1024 bytes long (256 4-byte entries) and is formatted
+  // the same as in AV_PIX_FMT_RGB32 described above (i.e., it is also
+  // endian-specific). Note also that the individual RGB32 palette components
+  // stored in AVFrame.data[1] should be in the range 0..255. This is important
+  // as many custom PAL8 video codecs that were designed to run on the IBM VGA
+  // graphics adapter use 6-bit palette components.
+
+  vec at(int x, int y) const {
+    assert(frame->format == AV_PIX_FMT_PAL8);
+    assert(x < width() && y < height());
+
+    // TODO fix this;
+    uint8_t index = frame->data[0][y * frame->linesize[0] + x];
+    const uint32_t *palette = (const uint32_t *)frame->data[1];
+
+    // clang-format off
+    // return vec(
+    //   (palette[index] >> 16) & 0xff,
+    //   (palette[index] >>  8) & 0xff,
+    //   (palette[index] >>  0) & 0xff
+    // ) / 255;
+    return vec(
+      index,index,index
+    );
+    // clang-format on
+  }
 
   ~Image() {
     av_packet_unref(&packet);

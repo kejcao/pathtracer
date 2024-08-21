@@ -141,15 +141,19 @@ public:
         Image *img = hit.obj->mat->diffuse_map;
         int w = img->width(), h = img->height();
 
-        int xi = std::clamp(static_cast<int>(u * w), 0, w - 1);
-        int yi = std::clamp(static_cast<int>(v * h), 0, h - 1);
-
-        int i = (yi*3*img->width()) + xi*3;
-        brdf = vec(
-          img->data()[i+0],
-          img->data()[i+1],
-          img->data()[i+2]
+        // int xi = std::clamp(static_cast<int>(u * w), 0, w - 1);
+        // int yi = std::clamp(static_cast<int>(v * h), 0, h - 1);
+        brdf = img->at(
+          std::clamp(static_cast<int>(u * w), 0, w - 1),
+          std::clamp(static_cast<int>(v * h), 0, h - 1)
         );
+
+        // int i = (yi*3*img->width()) + xi*3;
+        // brdf = vec(
+        //   img->data()[i+0],
+        //   img->data()[i+1],
+        //   img->data()[i+2]
+        // );
       }
 
       vec randdir = random_direction(normal);
