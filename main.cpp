@@ -16,8 +16,10 @@ import object;
 import math;
 
 // const auto s = Scene(parseobj("/home/kjc/untitled.obj"));
-const auto s = Scene(parseobj("/home/kjc/pathtrace/bunny.obj"));
+// const auto s = Scene(parseobj("/home/kjc/pathtrace/bunny.obj"));
 // const auto s = Scene(parseobj("/home/kjc/pathtrace/cube.obj"));
+// const auto s = Scene(parseobj("/home/kjc/pathtrace/greencube.obj"));
+const auto s = Scene(parseobj("/home/kjc/pathtrace/cube-texture.obj"));
 // const auto s = Scene(parseobj("examples/cornell-box.obj"));
 // const auto s = Scene(parseobj("examples/tea.obj"));
 // const auto s = Scene(parseobj("examples/redcube.obj"));
@@ -106,6 +108,7 @@ protected:
         movement.y = speed;
         break;
       case Qt::Key_R:
+        // std::println("origin: {}  direction: {}", cam.origin, cam.direction);
         startRender();
         break;
       default:
@@ -152,7 +155,7 @@ protected:
       float pitch = -diff.y() * sensitivity;
       pitch = std::max(-89.0f, std::min(89.0f, pitch)); // no flipping
 
-      cam.direction.y += yaw * M_PI / 180;
+      cam.direction.y -= yaw * M_PI / 180;
       cam.direction.x += pitch * M_PI / 180;
     }
   }

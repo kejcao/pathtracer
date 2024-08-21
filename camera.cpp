@@ -110,13 +110,48 @@ public:
         y = 0;
       y /= std::pow(to_light.norm(), 2);
 
-      color += light->mat->emission * cos_theta * y * (1/(light->area()*2));
+      color += light->mat->emission * cos_theta * y *
+               (1 / light->area()); // is the PDF right? TODO
     }
 
     // rr_prob is russian roulette probability; aka probability of continuing.
     constexpr double rr_prob = .7;
     if (depth <= 2 || randreal(0, 1) < rr_prob) {
-      vec brdf = hit.obj->mat->diffuse / M_PI; // lol
+      vec brdf;
+      if (hit.obj->mat->diffuse_map == nullptr) {
+        brdf = hit.obj->mat->diffuse / M_PI;
+      } else {
+        auto [beta,gamma,alpha] = hit.barycentric;
+
+        auto [u0,v0,_] = hit.obj->vt0();
+        auto [u1,v1,_] = hit.obj->vt1();
+        auto [u2,v2,_] = hit.obj->vt2();
+
+        auto [x0,y0,z0] = hit.obj->v0();
+        auto [x1,y1,z1] = hit.obj->v1();
+        auto [x2,y2,z2] = hit.obj->v2();
+
+        scalar x = alpha * x0 + beta * x1 + gamma * x2;
+        scalar y = alpha * y0 + beta * y1 + gamma * y2;
+        scalar z = alpha * z0 + beta * z1 + gamma * z2;
+
+        scalar u = alpha * u0 + beta * u1 + gamma * u2;
+        scalar v = alpha * v0 + beta * v1 + gamma * v2;
+
+        Image *img = hit.obj->mat->diffuse_map;
+        int w = img->width(), h = img->height();
+
+        int xi = std::clamp(static_cast<int>(u * w), 0, w - 1);
+        int yi = std::clamp(static_cast<int>(v * h), 0, h - 1);
+
+        int i = (yi*3*img->width()) + xi*3;
+        brdf = vec(
+          img->data()[i+0],
+          img->data()[i+1],
+          img->data()[i+2]
+        );
+      }
+
       vec randdir = random_direction(normal);
 
       // 1/2*pi in the PDF to account for hemisphere
@@ -156,13 +191,16 @@ public:
           [&](int py) {
             for (int px = 0; px < OUTW; ++px) {
               vec dir = point_towards(px, py);
-              pixels[py][px] = (i * pixels[py][px] + pathtrace(scene, origin, dir) * 255) / (i+1);
+              pixels[py][px] =
+                  (i * pixels[py][px] + pathtrace(scene, origin, dir) * 255) /
+                  (i + 1);
             }
             // p.increment();
           },
           threadcnt);
 
-      if (cb != nullptr) cb();
+      if (cb != nullptr)
+        cb();
     }
     std::println("done");
   }

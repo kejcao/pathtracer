@@ -30,7 +30,7 @@ target_sources(scene
     FILE_SET CXX_MODULES FILES
       scene.cpp
 )
-target_link_libraries(scene math object)
+target_link_libraries(scene object)
 
 add_library(camera)
 target_sources(camera
@@ -38,8 +38,9 @@ target_sources(camera
     FILE_SET CXX_MODULES FILES
       camera.cpp
 )
-target_link_libraries(camera math scene object)
+target_link_libraries(camera scene)
 
 add_executable(${PROJECT_NAME} main.cpp)
 target_link_libraries(${PROJECT_NAME} math scene camera object)
-target_link_libraries(${PROJECT_NAME} Qt5::Widgets)
+# target_link_libraries(${PROJECT_NAME} Qt5::Widgets libavcodec libavutil libavformat)
+target_link_libraries(${PROJECT_NAME} Qt5::Widgets avcodec avutil avformat)

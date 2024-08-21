@@ -5,7 +5,6 @@ module;
 #include <cassert>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <map>
 #include <memory>
 #include <print>
@@ -13,14 +12,96 @@ module;
 #include <regex>
 #include <span>
 #include <stdexcept>
-#include <unordered_map>
 #include <utility>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+}
 
 export module object;
 
 import math;
 
 namespace fs = std::filesystem;
+
+export class Image {
+public:
+  AVFormatContext *formatContext;
+  AVCodecContext *codecContext;
+  AVFrame *frame;
+  AVPacket packet;
+
+  void error(bool cond, std::string msg) {
+    if (cond) {
+      std::println(stderr, "{}", msg);
+      abort();
+    }
+  }
+
+  Image(const std::string &filename) {
+    formatContext = avformat_alloc_context();
+    error(!formatContext, "Could not allocate format context");
+    error(avformat_open_input(&formatContext, filename.c_str(), NULL, NULL) !=
+              0,
+          "Could not open image file");
+    error(avformat_find_stream_info(formatContext, NULL) < 0,
+          "Could not find stream info");
+
+    int videoStreamIndex = -1;
+    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
+      if (formatContext->streams[i]->codecpar->codec_type ==
+          AVMEDIA_TYPE_VIDEO) {
+        videoStreamIndex = i;
+        break;
+      }
+    }
+    error(videoStreamIndex == -1, "Could not find a video stream");
+
+    AVCodecParameters *codecParameters =
+        formatContext->streams[videoStreamIndex]->codecpar;
+    const AVCodec *codec = avcodec_find_decoder(codecParameters->codec_id);
+    error(!codec, "Unsupported codec");
+
+    codecContext = avcodec_alloc_context3(codec);
+    error(!codecContext, "Could not allocate codec context");
+    error(avcodec_parameters_to_context(codecContext, codecParameters) < 0,
+          "Could not copy codec parameters to codec context");
+    error(avcodec_open2(codecContext, codec, NULL) < 0, "Could not open codec");
+
+    frame = av_frame_alloc();
+    int response;
+
+    while (av_read_frame(formatContext, &packet) >= 0) {
+      if (packet.stream_index == videoStreamIndex) {
+        response = avcodec_send_packet(codecContext, &packet);
+        error(response < 0, "Failed to decode packet");
+
+        response = avcodec_receive_frame(codecContext, frame);
+        if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
+          av_packet_unref(&packet);
+          continue;
+        } else if (response < 0) {
+          fprintf(stderr, "Failed to decode frame\n");
+          break;
+        }
+        break;
+      }
+    }
+  }
+
+  int width() const { return frame->width; }
+  int height() const { return frame->height; }
+  uint8_t *data() const { return frame->data[0]; }
+
+  ~Image() {
+    av_packet_unref(&packet);
+    av_frame_free(&frame);
+    avcodec_free_context(&codecContext);
+    avformat_close_input(&formatContext);
+  }
+};
 
 class Material {
 public:
@@ -29,13 +110,14 @@ public:
   vec emission = vec(0, 0, 0);
   scalar shininess = 20;
   scalar index_of_refraction = 1;
+  Image *diffuse_map = nullptr;
 
   Material() = default;
   Material(vec diffuse, vec specular, scalar shininess)
       : diffuse{diffuse}, specular{specular}, shininess{shininess} {}
 };
 
-#define EPSILON 1e-3
+#define EPSILON 1e-5
 
 class AABB {
 public:
@@ -79,6 +161,7 @@ export class Triangle;
 export struct HitData {
   scalar t;
   const Triangle *obj;
+  vec barycentric;
   int hits = 0; // for special visualizations
 };
 
@@ -98,66 +181,69 @@ public:
   vec centroid() const { return .5 * bbox().min + .5 * bbox().max; }
 };
 
+// A very convenient and crucial class that constructs a standard BVH tree from
+// any list of Objects.
 export class BVH {
 public:
   unsigned int max_leaf_size = 8;
 
   struct Node {
+    // nodes[index + 0] is left  child
+    // nodes[index + 1] is right child
     union {
-      // If `count` == 0 then we are an internal node and use `index`;
-      // otherwise, we're a leaf and use `first` to point to objects.
-      unsigned int index; // `index` is left child, `index`+1 is right child.
+      // If count == 0 then we are an internal node and use index;
+      // otherwise, we're a leaf and use first to point to objects.
+      unsigned int index;
       unsigned int first;
     };
-    unsigned int count; // How many objects there are in this node.
+    unsigned int count; // Number of objects stored in this node.
     AABB box;
 
     bool is_leaf() const { return count > 0; }
     auto span(const auto &objs) const {
-      assert(first + count <= objs.size());
+      assert(count != 0 && first + count <= objs.size());
       auto start = objs.begin() + first;
       return std::span(start, start + count);
     }
   };
 
-  // tree is stored as a flat array
+  // BVH tree is stored as a flat array in nodes vector
   std::vector<Node> nodes;
+
+  // Store list of original objects to perform intersection checks with
   std::vector<Object *> objects;
 
   BVH() = default;
   BVH(auto objs) : objects{objs} {
     assert(!objects.empty());
 
-    // create first node that spans entire object list
+    // Create the first node which spans entire object list
     nodes.push_back({.first = 0, .count = (unsigned int)objects.size()});
-
-    // then recursively subdivide this node to create the tree
     update_box(0);
+
     subdivide(0);
   }
 
   HitData intersect(vec origin, vec direction, int i = 0) const {
-    if (objects.size() == 0)
-      return {INF};
     if (nodes[i].is_leaf()) {
-      HitData closest = {INF};
-      for (const auto &obj : nodes[i].span(objects)) {
-        HitData hit = obj->intersect(origin, direction);
-        if (hit.t >= EPSILON && hit.t < closest.t) {
-          ++hit.hits;
-          closest = hit;
-        }
-      }
-      return closest;
+      // clang-format off
+      return std::ranges::min(
+        nodes[i].span(objects)
+          | std::views::transform([&](const auto &obj) {
+            return obj->intersect(origin, direction);
+          }),
+        {},
+        [](const HitData &x) { return x.t; });
+      // clang-format on
+    } else {
+      if (!nodes[i].box.intersect(origin, direction))
+        return {INF};
+      HitData lhit = intersect(origin, direction, nodes[i].index);
+      HitData rhit = intersect(origin, direction, nodes[i].index + 1);
+      ++lhit.hits;
+      ++rhit.hits;
+      return lhit.t < rhit.t ? lhit : rhit;
     }
-    if (!nodes[i].box.intersect(origin, direction))
-      return {INF};
-
-    HitData lhit = intersect(origin, direction, nodes[i].index);
-    HitData rhit = intersect(origin, direction, nodes[i].index + 1);
-    ++lhit.hits;
-    ++rhit.hits;
-    return lhit.t < rhit.t ? lhit : rhit;
   }
 
   AABB bbox() const {
@@ -167,6 +253,8 @@ public:
   }
 
 private:
+  // Given a node and the span of objects it's associated with, this function
+  // sets the appropriate values for the AABB.
   void update_box(int i) {
     nodes[i].box = AABB(vec(INF, INF, INF), vec(-INF, -INF, -INF));
     for (const auto &obj : nodes[i].span(objects)) {
@@ -181,7 +269,11 @@ private:
     }
   }
 
+  // Given a leaf node, this function subdivides it into an internal node that
+  // refers to two other leaf nodes, each comprising half of the objects of the
+  // original leaf node.
   void subdivide(int i) {
+    assert(nodes[i].count != 0); // ensure this is a leaf node
     if (nodes[i].count <= max_leaf_size)
       return;
 
@@ -205,7 +297,6 @@ private:
 
     // If we can't do that fall back to sorting it into two piles.
     if (midpoint == 0 || midpoint >= nodes[i].count - 1) {
-      // O(n) compared to std::sort's O(n log n).
       std::nth_element(start, start + nodes[i].count / 2,
                        start + nodes[i].count,
                        [axis](const auto &a, const auto &b) {
@@ -222,8 +313,11 @@ private:
     nodes[i].index = lhs;
     nodes[i].count = 0;
 
+    // Update the AABBs of the new leaf nodes.
     update_box(lhs);
     update_box(lhs + 1);
+
+    // Recursively subdivide the new leaf nodes.
     subdivide(lhs);
     subdivide(lhs + 1);
   }
@@ -240,7 +334,7 @@ class Triangle : public Object {
 public:
   Triangle(Polygon *parent, Index v, Index vt, Index vn, bool smooth,
            Material *mat)
-      : Object(mat), parent{parent}, v{v}, vn{vn}, smooth{smooth} {
+      : Object(mat), parent{parent}, v{v}, vt{vt}, vn{vn}, smooth{smooth} {
 
     box = AABB(vec(std::min({v0().x, v1().x, v2().x}),
                    std::min({v0().y, v1().y, v2().y}),
@@ -253,6 +347,10 @@ public:
   vec v0() const;
   vec v1() const;
   vec v2() const;
+
+  vec vt0() const;
+  vec vt1() const;
+  vec vt2() const;
 
   vec normal() const { return (v1() - v0()).cross(v2() - v0()); }
 
@@ -285,7 +383,11 @@ public:
     scalar v = q.dot(direction);
     if (v < 0 || u + v > 1)
       return {INF};
-    return {q.dot(e2), this};
+
+    scalar t_ = q.dot(e2);
+    if (t_ < 1e-6) // distance too small indicates false positive.
+      return {INF};
+    return {t_, this, vec(u, v, 1 - u - v)};
   }
 
   AABB bbox() const override { return box; }
@@ -302,7 +404,7 @@ public:
   }
 
 private:
-  Index v, vn;
+  Index v, vt, vn;
   bool smooth;
   AABB box;
   Polygon *parent;
@@ -318,6 +420,9 @@ public:
 
   // This function should be called each time `faces` vector is modified.
   void init() {
+    std::println("v:{}, vt:{}, vn:{} f:{}", vertices.size(), vtextures.size(),
+                 vnormals.size(), faces.size());
+
     // Triangularize polygon.
     // TODO only works for convex polygons.
     auto addtriangle = [&](std::array<unsigned int, 3> v1,
@@ -396,6 +501,19 @@ vec Triangle::v2() const {
   return parent->vertices[v.i2];
 }
 
+vec Triangle::vt0() const {
+  assert(vt.i0 < parent->vtextures.size());
+  return parent->vtextures[vt.i0];
+}
+vec Triangle::vt1() const {
+  assert(vt.i1 < parent->vtextures.size());
+  return parent->vtextures[vt.i1];
+}
+vec Triangle::vt2() const {
+  assert(vt.i2 < parent->vtextures.size());
+  return parent->vtextures[vt.i2];
+}
+
 auto split = [](const std::string &s, const std::string &delim = " ") {
   std::vector<std::string> toks = {};
   size_t i = 0, pi = 0;
@@ -410,96 +528,98 @@ auto split = [](const std::string &s, const std::string &delim = " ") {
   return toks;
 };
 
-auto parsemtl = [](const std::string &filename, auto &materials) {
+auto parsemtl = [](fs::path filename, auto &materials) {
+  Material *m;
+
+  const std::vector<std::tuple<std::regex, std::function<void(std::smatch)>>> v{
+      {std::regex("^\\s*newmtl\\s+(.*?)\\s*$"),
+       [&](std::smatch matches) {
+         m = new Material();
+         materials[matches[1].str()] = m;
+       }},
+      {std::regex("^\\s*Kd\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)\\s*$"),
+       [&](std::smatch matches) {
+         m->diffuse =
+             vec(std::stof(matches[1].str()), std::stof(matches[2].str()),
+                 std::stof(matches[3].str()));
+       }},
+      {std::regex("^\\s*Ke\\s+([0-9.]+)\\s+([0-9.]+)\\s+([0-9.]+)\\s*$"),
+       [&](std::smatch matches) {
+         m->emission =
+             vec(std::stof(matches[1].str()), std::stof(matches[2].str()),
+                 std::stof(matches[3].str()));
+       }},
+      {std::regex("^\\s*map_Kd\\s+(.*?)\\s*$"), [&](std::smatch matches) {
+         m->diffuse_map =
+             new Image(fs::path(filename).parent_path() / matches[1].str());
+       }}};
+
   int lineno = 0;
   try {
     std::ifstream ifs(filename);
-    if (!ifs)
-      assert(false);
-
-    Material *m;
     std::string line;
     while (std::getline(ifs, line)) {
       ++lineno;
       std::vector<std::string> toks = split(line);
 
-      if (toks[0] == "newmtl") {
-        assert(toks.size() == 2);
-        m = new Material();
-        materials[toks[1]] = m;
-      } else if (toks[0] == "Kd") {
-        assert(toks.size() == 4);
-        m->diffuse =
-            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-      } else if (toks[0] == "Ke") {
-        assert(toks.size() == 4);
-        m->emission =
-            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-      } else if (toks[0] == "Ks") {
-        assert(toks.size() == 4);
-        m->specular =
-            vec(std::stof(toks[1]), std::stof(toks[2]), std::stof(toks[3]));
-      } else if (toks[0] == "Ns") {
-        assert(toks.size() == 2);
-        m->shininess = std::stof(toks[1]);
-      } else if (toks[0] == "Ni") {
-        assert(toks.size() == 2);
-        m->index_of_refraction = std::stof(toks[1]);
+      for (const auto &[r, f] : v) {
+        std::smatch matches;
+        if (std::regex_match(line, matches, r)) {
+          f(matches);
+          break;
+        }
       }
     }
   } catch (std::invalid_argument &e) {
-    throw std::runtime_error(filename + ": " + std::to_string(lineno) +
+    throw std::runtime_error(filename.string() + ": " + std::to_string(lineno) +
                              ": parse error");
   }
 };
-
-// namespace std {
-// unsigned int stou(const std::string &s) { return (unsigned int)std::stoi(s);
-// }
-// }; // namespace std
 
 // doesn't support obj wavefront files that "backreference" vertices.
 export std::vector<Object *>
 parseobj(const std::string &filename) { // this is shit code
   Progress pbar;
 
-  int offset = 0;       // offset, for vertex count. TODO
-  Polygon *p = nullptr; // current polygon object
+  veci offset = veci(0, 0, 0); // offset, for vertex counts. TODO
+  Polygon *p = nullptr;        // current polygon object
   std::map<std::string, Material *> materials;
   std::vector<Object *> objects; // past polygon objects
 
   auto FACE = // talk about overcomplication... the cpp muse guided me towards
               // this code.
-      [&offset](
-          const std::string &re,
-          std::function<std::array<unsigned int, 3>(std::vector<unsigned int>)>
-              f)
+      [&offset](const std::string &re,
+                std::function<veci(std::vector<unsigned int>)> f)
       -> std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>> {
     std::regex re_ = std::regex(re); // precompile
-    return {std::regex(std::format("^\\s*f({})+\\s*$", re)),
-            [&, re_, re](Polygon *p, std::smatch matches) {
-              auto search = [&offset](std::string text, std::regex pattern) {
-                std::sregex_iterator it(text.begin(), text.end(), pattern);
-                std::sregex_iterator end;
-                std::vector<std::vector<unsigned int>> parts;
-                while (it != end) {
-                  parts.push_back({});
-                  for (int i = 1; i < (*it).size(); ++i) {
-                    parts.back().push_back(
-                        (unsigned int)std::stoi((*it)[i].str()) - 1 - offset);
-                  }
-                  ++it;
-                }
-                return parts;
-              };
-
-              auto v = search(matches[0].str(), re_);
-              std::vector<std::array<unsigned int, 3>> face;
-              for (const auto &l : v) {
-                face.push_back(f(l));
+    return {
+        std::regex(std::format("^\\s*f({})+\\s*$", re)),
+        [&, re_, re](Polygon *p, std::smatch matches) {
+          auto search = [&offset, &p](std::string text, std::regex pattern) {
+            std::sregex_iterator it(text.begin(), text.end(), pattern);
+            std::sregex_iterator end;
+            std::vector<std::vector<unsigned int>> parts;
+            while (it != end) {
+              parts.push_back({});
+              for (int i = 1; i < (*it).size(); ++i) {
+                parts.back().push_back((unsigned int)std::stoi((*it)[i].str()));
               }
-              p->faces.push_back(face);
-            }};
+              ++it;
+            }
+            return parts;
+          };
+
+          auto v = search(matches[0].str(), re_);
+          std::vector<std::array<unsigned int, 3>> face;
+          for (const auto &l : v) {
+            auto v = f(l);
+            v -= veci(1, 1, 1);
+            v -= offset;
+            face.push_back(
+                {(unsigned int)v.x, (unsigned int)v.y, (unsigned int)v.z});
+          }
+          p->faces.push_back(face);
+        }};
   };
 
   // TODO implement s for smoothing
@@ -522,39 +642,37 @@ parseobj(const std::string &filename) { // this is shit code
                std::stof(matches[3].str()),
            });
          }},
-        {std::regex( // fix this vt v [u=0,w=0]
-             "^\\s*vt\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+        {std::regex(
+             "^\\s*vt\\s+(-?[0-9.]+)(\\s+-?[0-9.]+)?(\\s+-?[0-9.]+)?\\s*$"),
          [](Polygon *p, std::smatch matches) {
            p->vtextures.push_back({
                std::stof(matches[1].str()),
-               std::stof(matches[2].str()),
-               std::stof(matches[3].str()),
+               matches[2].matched ? std::stof(matches[2].str()) : 0,
+               matches[3].matched ? std::stof(matches[3].str()) : 0,
            });
          }},
         FACE("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)",
-             [](auto l) -> std::array<unsigned int, 3> {
-               return {l[0], l[1], l[2]};
-             }),
+             [](auto l) -> veci { return veci(l[0], l[1], l[2]); }),
         FACE("\\s+([0-9]+)\\/\\/([0-9]+)",
-             [](auto l) -> std::array<unsigned int, 3> {
-               return {l[0], 0, l[1]};
-             }),
+             [](auto l) -> veci { return veci(l[0], 0, l[1]); }),
         {std::regex("^o\\s(.*)$"),
          [&](Polygon *_, std::smatch matches) {
            if (p != nullptr) {
              p->init();
              objects.push_back(p);
-             offset += p->vertices.size();
+             offset += veci(p->vertices.size(), p->vtextures.size(),
+                            p->vnormals.size());
            }
            p = new Polygon();
            // matches[1].str(); // name
          }},
-        {std::regex("^mtllib\\s(.*)$"),
+        {std::regex("^\\s*mtllib\\s+(.*?)\\s*$"),
          [&](Polygon *_, std::smatch matches) {
            parsemtl(fs::path(filename).parent_path() / matches[1].str(),
                     materials);
          }},
-        {std::regex("^usemtl\\s(.*)$"), [&](Polygon *_, std::smatch matches) {
+        {std::regex("^\\s*usemtl\\s+(.*?)\\s*$"),
+         [&](Polygon *_, std::smatch matches) {
            p->mat = materials[matches[1].str()];
          }}};
 
@@ -568,6 +686,7 @@ parseobj(const std::string &filename) { // this is shit code
         std::smatch matches;
         if (std::regex_match(line, matches, r)) {
           f(p, matches);
+          break;
         }
       }
     }
