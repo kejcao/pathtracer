@@ -17,6 +17,8 @@ module;
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/pixfmt.h>
 #include <libswscale/swscale.h>
 }
 
@@ -28,10 +30,12 @@ namespace fs = std::filesystem;
 
 export class Image {
 public:
-  AVFormatContext *formatContext;
-  AVCodecContext *codecContext;
-  AVFrame *frame;
+  AVFormatContext *fmt_ctx;
+  AVCodecContext *dec_ctx;
+  AVFrame *raw_frame;
+  AVFrame *rgb_frame;
   AVPacket packet;
+  SwsContext *sws_ctx;
 
   void error(bool cond, std::string msg) {
     if (cond) {
@@ -40,95 +44,100 @@ public:
     }
   }
 
+  // https://stackoverflow.com/questions/9652760/how-to-set-decode-pixel-format-in-libavcodec
   Image(const std::string &filename) {
-    formatContext = avformat_alloc_context();
-    error(!formatContext, "Could not allocate format context");
-    error(avformat_open_input(&formatContext, filename.c_str(), NULL, NULL) !=
-              0,
+    fmt_ctx = avformat_alloc_context();
+    error(!fmt_ctx, "Could not allocate format context");
+    error(avformat_open_input(&fmt_ctx, filename.c_str(), NULL, NULL) != 0,
           "Could not open image file");
-    error(avformat_find_stream_info(formatContext, NULL) < 0,
+    error(avformat_find_stream_info(fmt_ctx, NULL) < 0,
           "Could not find stream info");
 
-    int videoStreamIndex = -1;
-    for (unsigned int i = 0; i < formatContext->nb_streams; i++) {
-      if (formatContext->streams[i]->codecpar->codec_type ==
-          AVMEDIA_TYPE_VIDEO) {
-        videoStreamIndex = i;
+    int vid_stream_index = -1;
+    for (unsigned int i = 0; i < fmt_ctx->nb_streams; i++) {
+      if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        vid_stream_index = i;
         break;
       }
     }
-    error(videoStreamIndex == -1, "Could not find a video stream");
+    error(vid_stream_index == -1, "Could not find a video stream");
 
     AVCodecParameters *codecParameters =
-        formatContext->streams[videoStreamIndex]->codecpar;
+        fmt_ctx->streams[vid_stream_index]->codecpar;
     const AVCodec *codec = avcodec_find_decoder(codecParameters->codec_id);
     error(!codec, "Unsupported codec");
 
-    codecContext = avcodec_alloc_context3(codec);
-    error(!codecContext, "Could not allocate codec context");
-    error(avcodec_parameters_to_context(codecContext, codecParameters) < 0,
-          "Could not copy codec parameters to codec context");
-    error(avcodec_open2(codecContext, codec, NULL) < 0, "Could not open codec");
-
-    frame = av_frame_alloc();
-    int response;
-
-    error(av_read_frame(formatContext, &packet) < 0, "Failed to read frame");
-    if (packet.stream_index == videoStreamIndex) {
-      response = avcodec_send_packet(codecContext, &packet);
-      error(response < 0, "Failed to decode packet");
-
-      response = avcodec_receive_frame(codecContext, frame);
-      error(response < 0, "Failed to decode frame");
-      if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
-        av_packet_unref(&packet);
-        error(false, "Failed to receive frame");
-      }
-    }
-  }
-
-  int width() const { return frame->width; }
-  int height() const { return frame->height; }
-
-  // on https://ffmpeg.org/doxygen/2.7/pixfmt_8h.html:
-  // AV_PIX_FMT_RGB32 is handled in an endian-specific manner. An RGBA color is
-  // put together as: (A << 24) | (R << 16) | (G << 8) | B This is stored as
-  // BGRA on little-endian CPU architectures and ARGB on big-endian CPUs.
-  //
-  // When the pixel format is palettized RGB32 (AV_PIX_FMT_PAL8), the palettized
-  // image data is stored in AVFrame.data[0]. The palette is transported in
-  // AVFrame.data[1], is 1024 bytes long (256 4-byte entries) and is formatted
-  // the same as in AV_PIX_FMT_RGB32 described above (i.e., it is also
-  // endian-specific). Note also that the individual RGB32 palette components
-  // stored in AVFrame.data[1] should be in the range 0..255. This is important
-  // as many custom PAL8 video codecs that were designed to run on the IBM VGA
-  // graphics adapter use 6-bit palette components.
-
-  vec at(int x, int y) const {
-    assert(frame->format == AV_PIX_FMT_PAL8);
-    assert(x < width() && y < height());
-
-    // TODO fix this;
-    uint8_t index = frame->data[0][y * frame->linesize[0] + x];
-    const uint32_t *palette = (const uint32_t *)frame->data[1];
-
     // clang-format off
-    // return vec(
-    //   (palette[index] >> 16) & 0xff,
-    //   (palette[index] >>  8) & 0xff,
-    //   (palette[index] >>  0) & 0xff
-    // ) / 255;
-    return vec(
-      index,index,index
+    // start initing everything
+    dec_ctx = avcodec_alloc_context3(codec);
+    error(!dec_ctx, "Could not allocate codec context");
+    error(
+      avcodec_parameters_to_context(dec_ctx, codecParameters) < 0,
+      "Could not copy codec parameters to codec context"
+    );
+    error(avcodec_open2(dec_ctx, codec, NULL) < 0, "Could not open codec");
+
+    int w = dec_ctx->width;
+    int h = dec_ctx->height;
+    raw_frame = av_frame_alloc();
+    rgb_frame = av_frame_alloc();
+
+    // setup sws to convert to AV_PIX_FMT_RGB24 format
+    // TODO actually free this stuff. Not strictly necessary rn since we need
+    // all the data until end of pathtracer run.
+    uint8_t *buf = (uint8_t *)av_malloc(
+        av_image_get_buffer_size(AV_PIX_FMT_RGB24, w, h, 1));
+    av_image_fill_arrays(rgb_frame->data, rgb_frame->linesize, buf,
+                         AV_PIX_FMT_RGB24, w, h, 1);
+
+    rgb_frame->width = dec_ctx->width;
+    rgb_frame->height = dec_ctx->height;
+    rgb_frame->format = AV_PIX_FMT_RGB24;
+
+    sws_ctx = sws_getContext(
+      w, h, dec_ctx->pix_fmt, // src
+      w, h, AV_PIX_FMT_RGB24, // dst
+      SWS_BICUBIC, NULL, NULL, NULL
+    );
+    error(!sws_ctx, "Failed to initialize conversion context");
+
+    // start reading pixel data
+    error(av_read_frame(fmt_ctx, &packet) < 0, "Failed to read frame");
+    error(packet.stream_index != vid_stream_index, "Video stream error");
+    error(avcodec_send_packet(dec_ctx, &packet) < 0, "Failed to decode packet");
+
+    int response = avcodec_receive_frame(dec_ctx, raw_frame);
+    error(
+      response < 0 ||
+      response == AVERROR(EAGAIN) ||
+      response == AVERROR_EOF,
+      "Failed to decode frame"
+    );
+
+    sws_scale(sws_ctx,
+      raw_frame->data, raw_frame->linesize, 0, dec_ctx->height,
+      rgb_frame->data, rgb_frame->linesize
     );
     // clang-format on
   }
 
+  int width() const { return raw_frame->width; }
+  int height() const { return raw_frame->height; }
+
+  vec at(int x, int y) const {
+    assert(rgb_frame->format == AV_PIX_FMT_RGB24);
+    assert(x < width() && y < height());
+
+    uint8_t *v = rgb_frame->data[0] + (y * rgb_frame->linesize[0] + x * 3);
+    return vec(v[0], v[1], v[2]) / 255;
+  }
+
   ~Image() {
+    sws_freeContext(sws_ctx);
     av_packet_unref(&packet);
-    av_frame_free(&frame);
-    avcodec_free_context(&codecContext);
-    avformat_close_input(&formatContext);
+    av_frame_free(&raw_frame);
+    avcodec_free_context(&dec_ctx);
+    avformat_close_input(&fmt_ctx);
   }
 };
 
@@ -543,20 +552,6 @@ vec Triangle::vt2() const {
   return parent->vtextures[vt.i2];
 }
 
-auto split = [](const std::string &s, const std::string &delim = " ") {
-  std::vector<std::string> toks = {};
-  size_t i = 0, pi = 0;
-  while ((i = s.find(delim, pi)) != std::string::npos) {
-    // skip empty strings
-    // if (i-pi != 0) {
-    toks.push_back(s.substr(pi, i - pi));
-    // }
-    pi = i + delim.size();
-  }
-  toks.push_back(s.substr(pi));
-  return toks;
-};
-
 auto parsemtl = [](fs::path filename, auto &materials) {
   Material *m;
 
@@ -583,25 +578,16 @@ auto parsemtl = [](fs::path filename, auto &materials) {
              new Image(fs::path(filename).parent_path() / matches[1].str());
        }}};
 
-  int lineno = 0;
-  try {
-    std::ifstream ifs(filename);
-    std::string line;
-    while (std::getline(ifs, line)) {
-      ++lineno;
-      std::vector<std::string> toks = split(line);
-
-      for (const auto &[r, f] : v) {
-        std::smatch matches;
-        if (std::regex_match(line, matches, r)) {
-          f(matches);
-          break;
-        }
+  std::ifstream ifs(filename);
+  std::string line;
+  while (std::getline(ifs, line)) {
+    for (const auto &[r, f] : v) {
+      std::smatch matches;
+      if (std::regex_match(line, matches, r)) {
+        f(matches);
+        break;
       }
     }
-  } catch (std::invalid_argument &e) {
-    throw std::runtime_error(filename.string() + ": " + std::to_string(lineno) +
-                             ": parse error");
   }
 };
 
@@ -617,13 +603,13 @@ parseobj(const std::string &filename) { // this is shit code
 
   auto FACE = // talk about overcomplication... the cpp muse guided me towards
               // this code.
-      [&offset](const std::string &re,
-                std::function<veci(std::vector<unsigned int>)> f)
-      -> std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>> {
+      [&](const std::string &re,
+          std::function<veci(std::vector<unsigned int>)> f)
+      -> std::tuple<std::regex, std::function<void(std::smatch)>> {
     std::regex re_ = std::regex(re); // precompile
     return {
         std::regex(std::format("^\\s*f({})+\\s*$", re)),
-        [&, re_, re](Polygon *p, std::smatch matches) {
+        [&, re_, re](std::smatch matches) {
           auto search = [&offset, &p](std::string text, std::regex pattern) {
             std::sregex_iterator it(text.begin(), text.end(), pattern);
             std::sregex_iterator end;
@@ -652,82 +638,73 @@ parseobj(const std::string &filename) { // this is shit code
   };
 
   // TODO implement s for smoothing
-  const std::vector<
-      std::tuple<std::regex, std::function<void(Polygon *, std::smatch)>>>
-      v{{std::regex("^\\s*v\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
-         [](Polygon *p, std::smatch matches) {
-           p->vertices.push_back({
-               std::stof(matches[1].str()),
-               std::stof(matches[2].str()),
-               std::stof(matches[3].str()),
-           });
-         }},
-        {std::regex(
-             "^\\s*vn\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
-         [](Polygon *p, std::smatch matches) {
-           p->vnormals.push_back({
-               std::stof(matches[1].str()),
-               std::stof(matches[2].str()),
-               std::stof(matches[3].str()),
-           });
-         }},
-        {std::regex(
-             "^\\s*vt\\s+(-?[0-9.]+)(\\s+-?[0-9.]+)?(\\s+-?[0-9.]+)?\\s*$"),
-         [](Polygon *p, std::smatch matches) {
-           p->vtextures.push_back({
-               std::stof(matches[1].str()),
-               matches[2].matched ? std::stof(matches[2].str()) : 0,
-               matches[3].matched ? std::stof(matches[3].str()) : 0,
-           });
-         }},
-        FACE("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)",
-             [](auto l) -> veci { return veci(l[0], l[1], l[2]); }),
-        FACE("\\s+([0-9]+)\\/\\/([0-9]+)",
-             [](auto l) -> veci { return veci(l[0], 0, l[1]); }),
-        {std::regex("^o\\s(.*)$"),
-         [&](Polygon *_, std::smatch matches) {
-           if (p != nullptr) {
-             p->init();
-             objects.push_back(p);
-             offset += veci(p->vertices.size(), p->vtextures.size(),
-                            p->vnormals.size());
-           }
-           p = new Polygon();
-           // matches[1].str(); // name
-         }},
-        {std::regex("^\\s*mtllib\\s+(.*?)\\s*$"),
-         [&](Polygon *_, std::smatch matches) {
-           parsemtl(fs::path(filename).parent_path() / matches[1].str(),
-                    materials);
-         }},
-        {std::regex("^\\s*usemtl\\s+(.*?)\\s*$"),
-         [&](Polygon *_, std::smatch matches) {
-           p->mat = materials[matches[1].str()];
-         }}};
+  const std::vector<std::tuple<std::regex, std::function<void(std::smatch)>>> v{
+      {std::regex("^\\s*v\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+       [&](std::smatch matches) {
+         assert(p != nullptr);
+         p->vertices.push_back({
+             std::stof(matches[1].str()),
+             std::stof(matches[2].str()),
+             std::stof(matches[3].str()),
+         });
+       }},
+      {std::regex("^\\s*vn\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s+(-?[0-9.]+)\\s*$"),
+       [&](std::smatch matches) {
+         assert(p != nullptr);
+         p->vnormals.push_back({
+             std::stof(matches[1].str()),
+             std::stof(matches[2].str()),
+             std::stof(matches[3].str()),
+         });
+       }},
+      {std::regex(
+           "^\\s*vt\\s+(-?[0-9.]+)(\\s+-?[0-9.]+)?(\\s+-?[0-9.]+)?\\s*$"),
+       [&](std::smatch matches) {
+         assert(p != nullptr);
+         p->vtextures.push_back({
+             std::stof(matches[1].str()),
+             matches[2].matched ? std::stof(matches[2].str()) : 0,
+             matches[3].matched ? std::stof(matches[3].str()) : 0,
+         });
+       }},
+      FACE("\\s+([0-9]+)\\/([0-9]+)\\/([0-9]+)",
+           [](auto l) -> veci { return veci(l[0], l[1], l[2]); }),
+      FACE("\\s+([0-9]+)\\/\\/([0-9]+)",
+           [](auto l) -> veci { return veci(l[0], 0, l[1]); }),
+      {std::regex("^o\\s(.*)$"),
+       [&](std::smatch matches) {
+         if (p != nullptr) {
+           p->init();
+           objects.push_back(p);
+           offset += veci(p->vertices.size(), p->vtextures.size(),
+                          p->vnormals.size());
+         }
+         p = new Polygon();
+       }},
+      {std::regex("^\\s*mtllib\\s+(.*?)\\s*$"),
+       [&](std::smatch matches) {
+         parsemtl(fs::path(filename).parent_path() / matches[1].str(),
+                  materials);
+       }},
+      {std::regex("^\\s*usemtl\\s+(.*?)\\s*$"),
+       [&](std::smatch matches) { p->mat = materials[matches[1].str()]; }}};
 
-  int lineno = 0;
-  try {
-    std::ifstream ifs(filename);
-    std::string line;
-    while (std::getline(ifs, line)) {
-      ++lineno;
-      for (const auto &[r, f] : v) {
-        std::smatch matches;
-        if (std::regex_match(line, matches, r)) {
-          f(p, matches);
-          break;
-        }
+  std::ifstream ifs(filename);
+  std::string line;
+  while (std::getline(ifs, line)) {
+    for (const auto &[r, f] : v) {
+      std::smatch matches;
+      if (std::regex_match(line, matches, r)) {
+        f(matches);
+        break;
       }
     }
-
-    if (p != nullptr) {
-      p->init();
-      objects.push_back(p);
-    }
-    pbar.finish(std::format("parse {}", filename));
-    return objects;
-  } catch (std::invalid_argument &e) {
-    throw std::runtime_error(filename + ": " + std::to_string(lineno) +
-                             ": parse error");
   }
+
+  if (p != nullptr) {
+    p->init();
+    objects.push_back(p);
+  }
+  pbar.finish(std::format("parse {}", filename));
+  return objects;
 }
